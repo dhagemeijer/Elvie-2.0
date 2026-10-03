@@ -58,9 +58,12 @@ export class ConversationEngine {
       ];
     } catch (error) {
       const reason = error instanceof Error ? error.name : 'unknown';
+      // Normal employee authentication failure, NOT an administrative action:
+      // use a neutral session event type. Administrative audit event types
+      // are reserved for genuine administrative access (Build 05+).
       this.auditSafe(
         createAuditEvent({
-          eventType: 'administrative_authentication',
+          eventType: 'employee_session_establishment',
           actorId: 'unauthenticated',
           action: 'establish_session',
           outcome: 'failed',
