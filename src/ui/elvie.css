@@ -1,0 +1,80 @@
+/* Elvie chat shell — functional styling, not final visual design. */
+
+.elvie-shell {
+  display: flex;
+  flex-direction: column;
+  max-width: 480px;
+  margin: 0 auto;
+  height: 100vh;
+  box-sizing: border-box;
+  padding: 1rem;
+  gap: 0.75rem;
+}
+
+.elvie-header h1 {
+  font-size: 1.1rem;
+  margin: 0;
+}
+
+.elvie-log {
+  flex: 1;
+  overflow-y: auto;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  padding: 0.75rem;
+  background: #fafafa;
+}
+
+.elvie-message {
+  margin: 0.25rem 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  white-space: pre-wrap;
+}
+
+.elvie-message--elvie {
+  background: #e8f0fe;
+}
+
+.elvie-message--employee {
+  background: #e6f4ea;
+  text-align: right;
+}
+
+.elvie-message--error {
+  background: #fdecea;
+  color: #a12;
+}
+
+.elvie-form {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.elvie-input {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  font-size: 1rem;
+  border: 1px solid #888;
+  border-radius: 6px;
+}
+
+.elvie-send {
+  padding: 0.5rem 1rem;
+  font-size: 1rem;
+  border: 1px solid #888;
+  border-radius: 6px;
+  background: #fff;
+}
+
+/* Visible focus for keyboard users. */
+.elvie-input:focus-visible,
+.elvie-send:focus-visible {
+  outline: 3px solid #1a73e8;
+  outline-offset: 2px;
+}
+
+.elvie-input:disabled,
+.elvie-send:disabled {
+  opacity: 0.6;
+}
