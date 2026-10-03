@@ -66,7 +66,8 @@ describe('ConversationEngine', () => {
   });
 
   it('fails closed on start when identity is not configured', async () => {
-    const audit = new InMemoryAuditLogger();
+    const { engine: _, audit, incidents } = createTestEngine();
+    void _; void incidents;
     const engine = new ConversationEngine({
       identity: unconfiguredIdentity(),
       knowledge: new MockKnowledgeProvider(),
@@ -79,6 +80,11 @@ describe('ConversationEngine', () => {
     expect(messages[0]?.text).not.toContain('Test Medewerker');
     const authEvent = audit.recordedEvents.find((event) => event.action === 'establish_session');
     expect(authEvent?.outcome).toBe('failed');
+    // A failed normal employee session must NOT be recorded as an
+    // administrative event type; administrative event types are reserved
+    // for genuine administrative access.
+    expect(authEvent?.eventType).toBe('employee_session_establishment');
+    expect(audit.recordedEvents.some((event) => event.eventType === 'administrative_authentication')).toBe(false);
     // No session exists: input cannot proceed.
     const reply = await engine.handleEmployeeInput('hallo');
     expect(reply[0]?.role).toBe('error');

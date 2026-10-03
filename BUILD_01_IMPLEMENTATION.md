@@ -8,7 +8,8 @@ Status: implementation note for `build-01-application-foundation`
 index.html                    — entry page (chat shell root)
 src/
   main.ts                    — entrypoint; fail-closed production wiring, dev-only mock loading
-  app/production-composition.ts — production composition: every port fail-closed
+  app/production-composition.ts — production composition: every port fail-closed;
+                                   explicit unconfigured audit destination (release blocker)
   dev/dev-engine.ts          — dev composition with fictional mocks (dynamic import, pruned from prod build)
   domain/                    — conversation domain (no TOPdesk/UI knowledge)
     conversation-context.ts  — typed central ConversationContext
@@ -27,17 +28,18 @@ tests/                       — unit tests + UI smoke test (Vitest, happy-dom)
 
 - **Stack:** TypeScript, Vite, Vitest, vanilla TS UI (no UI framework), happy-dom for the UI smoke test. Zero runtime dependencies; all dependencies are dev-only.
 - **Fail-closed composition:** `src/app/production-composition.ts` wires `unconfiguredIdentity/Knowledge/Incident` ports that always reject. There is no silent fallback to mocks; dev mocks load only through a dynamic import behind `import.meta.env.DEV`, which the production build statically excludes.
-- **State machine:** transitions implement exactly the ARCHITECTURE.md lifecycle. Invalid transitions throw `InvalidTransitionError` and never mutate state. `DONE` and `CONFIRM` are terminal.
+- **Audit event types:** a failed normal employee session is recorded with the neutral event type `employee_session_establishment`. `administrative_*` event types are reserved for genuine administrative access (Build 05+).
+- **Production audit destination:** explicitly NOT configured in Build 01. The unconfigured sink throws `AuditDestinationNotConfiguredError` for every event; the engine surfaces this on the operational channel (events are never silently dropped and the console is never an audit destination). Configuring a centralized audit destination is a documented **release blocker** before any production release (ROADMAP.md Build 08).
+- **State machine:** transitions implement exactly the ARCHITECTURE.md lifecycle. Invalid transitions throw `InvalidTransitionError` and never mutate state. `DONE` and `CONFIRM` are terminal. `RESOLVE -> INTAKE` is not in the ARCHITECTURE.md diagram and is deliberately NOT implemented; it is pending a separate architectural decision.
 - **Answers never re-asked:** the ConversationContext retains supplied answers keyed by logical question; states consult `hasAnswer` semantics rather than re-asking.
 - **PII safeguard:** the engine blocks input containing BSN/IBAN-shaped values before storing, searching or submitting, and never logs the value (only a metadata-level warn).
-- **Audit events:** emitted for session-establishment failures and incident submission outcome (success/failed), per AUDIT_LOGGING.md field shape, without conversation content.
+- **CI:** the GitHub Actions verify workflow is control-only: `contents: read`, `npm ci` from the committed lockfile, and typecheck/lint/tests/build must all pass. CI never mutates repository contents and never commits a lockfile.
 
 ## Known limitations (by design, later builds)
 
 - State handlers are deterministic skeletons; real intent detection, entity extraction, impact/urgency rules and knowledge ranking arrive in Builds 02–03.
-- `RESOLVE -> INTAKE` (knowledge did not solve after all) is **not** in the ARCHITECTURE.md diagram and is therefore not implemented; flagged for architectural confirmation (see completion report).
 - PII detection is a conservative heuristic (9-digit BSN pattern, IBAN pattern); validated detection and phishing-specific policy are later builds.
-- The audit sink in dev/tests is in-memory; the production destination is a Build 08 decision. The unconfigured production sink surfaces events on the console for now and is called out as a known limitation.
+- The audit sink in dev/tests is in-memory; the centralized production audit destination is a Build 08 decision and a release blocker until configured.
 - Preview has no edit capability yet; Build 04 adds preview/edit/confirm.
 
 ## Security notes
