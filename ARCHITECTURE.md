@@ -67,13 +67,17 @@ The core is a deterministic state machine, not an LLM.
 START
   -> UNDERSTAND
   -> KNOWLEDGE_SEARCH
-       -> RESOLVE -> DONE
+       -> RESOLVE
+            -> DONE
+            -> INTAKE
        -> INTAKE
   -> COMPLETE_CONTEXT
   -> PREVIEW
   -> SUBMIT
   -> CONFIRM
 ```
+
+**Resolution decision:** `RESOLVE -> DONE` is used only when the employee confirms that the offered resolution solved the issue. If the offered resolution does not solve the issue, the controlled transition is `RESOLVE -> INTAKE`, after which Elvie gathers the missing context required for TOPdesk. This keeps knowledge-first self-service and incident intake within one deterministic interaction without treating an unsuccessful resolution as complete.
 
 A central ConversationContext accumulates facts already supplied or reliably derived. Elvie asks only for missing information and must not knowingly ask the same question twice.
 
