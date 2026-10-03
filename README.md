@@ -23,9 +23,34 @@ Elvie is intentionally **not a generative-AI chatbot**. It uses deterministic co
 
 Digi Daan 0.20.0 is the functional prototype/reference. Elvie 2.0 is a clean implementation and does not inherit the prototype's single-file architecture.
 
+**Build 01 — Application Foundation (branch `build-01-application-foundation`)**
+
+Local development (no secrets or configuration required):
+
+```bash
+npm install
+npm run dev        # dev server with fictional mock identity/knowledge/incident data
+```
+
+Quality commands:
+
+```bash
+npm run typecheck  # tsc --noEmit
+npm run lint       # eslint
+npm run test       # vitest run (unit tests + UI smoke test)
+npm run build      # vite production build (fail-closed composition)
+npm run verify     # typecheck + lint + test + build
+```
+
+Notes:
+- The dev server (`npm run dev`) wires fictional mocks so the foundation can be exercised locally.
+- The production build contains no mock identity: the unconfigured identity port fails closed by design.
+- See the [Build 01 implementation note](BUILD_01_IMPLEMENTATION.md).
+
 See:
 - [Architecture](ARCHITECTURE.md)
 - [Security principles](SECURITY_PRINCIPLES.md)
+- [Audit & logging baseline](AUDIT_LOGGING.md)
 - [Roadmap](ROADMAP.md)
 - [Functional reference](docs/functional-reference.md)
 - [Definition of Done](docs/definition-of-done.md)
