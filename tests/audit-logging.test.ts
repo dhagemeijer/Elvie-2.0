@@ -20,8 +20,8 @@ describe('audit logging contract', () => {
     audit.record(
       createAuditEvent({
         eventType: 'administrative_authentication',
-        actorId: 'mock-employee-0001',
-        actorRole: 'employee',
+        actorId: 'mock-admin-0001',
+        actorRole: 'admin',
         action: 'establish_session',
         outcome: 'success',
         correlationId: 'session-1',
@@ -32,7 +32,7 @@ describe('audit logging contract', () => {
     const event = audit.recordedEvents[0];
     expect(event).toBeDefined();
     expect(event?.outcome).toBe('success');
-    expect(event?.actorId).toBe('mock-employee-0001');
+    expect(event?.actorId).toBe('mock-admin-0001');
   });
 
   it('emitted audit events do not contain representative sensitive strings', () => {
@@ -54,7 +54,8 @@ describe('audit logging contract', () => {
     for (const sensitive of REPRESENTATIVE_SENSITIVE_STRINGS) {
       expect(serialized).not.toContain(sensitive);
     }
-    for (const pattern of SENSITIVE_VALUE_PATTERNS) {
+    for (const pattern of SENSITIVE_VA
+LUE_PATTERNS) {
       expect(pattern.test(serialized)).toBe(false);
     }
   });
