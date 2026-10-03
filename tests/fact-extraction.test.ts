@@ -85,7 +85,7 @@ describe('fact extraction (BUILD_02.md par. 2)', () => {
     );
     expect(factOf(result, 'impact')?.value).toBe('kan niet werken');
     expect(factOf(result, 'affectedUsers')?.sourceRuleId).toBe('fact_affected_colleagues');
-    expect(factOf(result, 'attemptedSolutions')?.value).toBe('al geprobeerd');
+    expect(factOf(result, 'attemptedSolutions')?.value).toBe('herstart');
     expect(factOf(result, 'urgency')?.value).toBe('urgent');
   });
 
