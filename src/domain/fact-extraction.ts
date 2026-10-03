@@ -96,8 +96,8 @@ export function extractFacts(
       const distinct = [...new Set(hits)];
       if (distinct.length === 1) {
         const canonical = distinct[0];
-        const matched = subjects.find((s) => s.kind === kind && s.canonical === canonical)?.matched ?? canonical;
         if (canonical !== undefined) {
+          const matched = subjects.find((s) => s.kind === kind && s.canonical === canonical)?.matched ?? canonical;
           facts.push({
             category,
             record: { value: canonical, kind: 'explicit', evidence: [matched], capturedAtTurn },

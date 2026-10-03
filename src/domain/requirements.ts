@@ -115,8 +115,7 @@ function ruleApplies(
 
 /**
  * Calculate the relevant required and missing fact categories from the
- * cu
-rrent intent, known facts, recognized subject and applicable rules.
+ * current intent, known facts, recognized subject and applicable rules.
  * Deterministic: identical context and rules produce an identical result.
  */
 export function calculateMissingFacts(
