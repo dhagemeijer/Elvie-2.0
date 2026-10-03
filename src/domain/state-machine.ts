@@ -2,16 +2,20 @@ import type { ConversationStateName } from './conversation-context';
 
 /**
  * Allowed state transitions, exactly as specified by the structural lifecycle
- * in ARCHITECTURE.md and BUILD_01.md:
+ * in ARCHITECTURE.md (approved resolution decision) and BUILD_01.md:
  *
  * START -> UNDERSTAND -> KNOWLEDGE_SEARCH -> RESOLVE -> DONE
- *                                  \-> INTAKE -> COMPLETE_CONTEXT -> PREVIEW -> SUBMIT -> CONFIRM
+ *                                            \-> INTAKE -> COMPLETE_CONTEXT -> PREVIEW -> SUBMIT -> CONFIRM
+ *                          \-> INTAKE
+ *
+ * Resolution decision: RESOLVE -> DONE only when the employee confirms the
+ * resolution solved the issue; RESOLVE -> INTAKE when it did not.
  */
 export const STATE_TRANSITIONS: Readonly<Record<ConversationStateName, readonly ConversationStateName[]>> = {
   START: ['UNDERSTAND'],
   UNDERSTAND: ['KNOWLEDGE_SEARCH'],
   KNOWLEDGE_SEARCH: ['RESOLVE', 'INTAKE'],
-  RESOLVE: ['DONE'],
+  RESOLVE: ['DONE', 'INTAKE'],
   DONE: [],
   INTAKE: ['COMPLETE_CONTEXT'],
   COMPLETE_CONTEXT: ['PREVIEW'],

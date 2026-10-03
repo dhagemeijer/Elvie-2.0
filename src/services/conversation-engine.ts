@@ -153,8 +153,11 @@ export class ConversationEngine {
     const answer = text.trim().toLowerCase();
     recordAnswer(context, 'solved_question', answer);
 
+    // Resolution decision (approved architectural decision): enter RESOLVE
+    // first, then exit to DONE (solved) or INTAKE (not solved).
+    applyTransition(context, 'RESOLVE');
+
     if (answer === 'ja' || answer === 'yes') {
-      applyTransition(context, 'RESOLVE');
       applyTransition(context, 'DONE');
       this.operational('info', 'knowledge resolved the issue', 'success');
       return [{ role: 'elvie', text: 'Fijn dat dit je verder hielp. Fijne dag!' }];
