@@ -1,0 +1,25 @@
+{
+  "name": "elvie-2.0",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Elvie 2.0 — internal IT service desk assistant (Build 01 application foundation).",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "vite build",
+    "verify": "npm run typecheck && npm run lint && npm run test && npm run build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.30.0",
+    "eslint": "^9.30.0",
+    "happy-dom": "^18.0.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.35.0",
+    "vite": "^7.1.0",
+    "vitest": "^3.2.4"
+  }
+}

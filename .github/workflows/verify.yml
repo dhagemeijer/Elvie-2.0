@@ -1,0 +1,37 @@
+# Build 01 verification pipeline (development tooling only).
+# Control-only: runs the quality gates from BUILD_01.md on every push and
+# pull request (typecheck, lint, tests, production build) using the committed
+# dependency lockfile. CI never mutates repository contents.
+# GitHub/source control is outside Elvie's production trust boundary
+# (ARCHITECTURE.md).
+name: verify
+
+on:
+  push:
+    branches: [build-01-application-foundation]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies (from lockfile)
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Tests
+        run: npm run test
+      - name: Production build
+        run: npm run build
