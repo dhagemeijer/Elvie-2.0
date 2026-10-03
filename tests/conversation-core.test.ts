@@ -10,7 +10,7 @@ function newContext(): ConversationContext {
 /** The engine owns the logical turn counter; tests simulate its increment. */
 function turn(context: ConversationContext, input: string) {
   context.currentTurn += 1;
-  return turn(context, input);
+  return processEmployeeMessage(context, input);
 }
 
 describe('Conversation Core determinism and state authority', () => {
