@@ -30,7 +30,7 @@ export interface RequirementRule {
   readonly ruleId: string;
   readonly when: RequirementRuleCondition;
   /** Categories this rule requires (when applicable). */
-  readonly require: readonly FactCategory[];
+  readonly require?: readonly FactCategory[];
   /** Categories this rule suppresses (when applicable), e.g. irrelevant ones. */
   readonly suppress?: readonly FactCategory[];
 }
@@ -43,6 +43,7 @@ export interface RequirementRule {
  * - access request requires the requested resource/target;
  * - security case uses the applicable security clarification requirements.
  */
+
 export const FICTIONAL_REQUIREMENT_RULES: readonly RequirementRule[] = [
   {
     ruleId: 'req_incident_core',
@@ -114,7 +115,8 @@ function ruleApplies(
 
 /**
  * Calculate the relevant required and missing fact categories from the
- * current intent, known facts, recognized subject and applicable rules.
+ * cu
+rrent intent, known facts, recognized subject and applicable rules.
  * Deterministic: identical context and rules produce an identical result.
  */
 export function calculateMissingFacts(
@@ -131,7 +133,7 @@ export function calculateMissingFacts(
     if (!ruleApplies(rule.when, intent, subjectValues)) {
       continue;
     }
-    for (const category of rule.require) {
+    for (const category of rule.require ?? []) {
       required.add(category);
     }
     for (const category of rule.suppress ?? []) {
