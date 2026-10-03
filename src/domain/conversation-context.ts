@@ -1,5 +1,5 @@
 import type { FactCategory, FactRecord } from './facts';
-import type { IntentClassification } from './intent-classification';
+import type { ConversationIntent, IntentClassification } from './intent-classification';
 
 /**
  * Conversation state names of the deterministic Elvie lifecycle.
@@ -21,7 +21,7 @@ export type ConversationStateName =
 export type ConversationFactValue = string | number | boolean | readonly string[];
 
 // Re-exported for existing import sites; defined with the classifier.
-export type { ConversationIntent } from './intent-classification';
+export type { ConversationIntent };
 
 /**
  * Central, typed conversation context. Every field except identity of the
@@ -47,8 +47,9 @@ export interface ConversationContext {
    */
   currentTurn: number;
   /** Latest effective intent (kept in sync with intentClassification). */
-  intent?: import('./intent-classification').ConversationIntent;
-  /** Explainable classification record (value, qualitative confidence, evidence). */
+  intent?: ConversationIntent;
+  /** Explainable classification record (value, qualitative confidence,
+ evidence). */
   intentClassification?: IntentClassification;
   /**
    * Active structured facts per category. Unknown categories are absent;
