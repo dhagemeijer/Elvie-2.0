@@ -7,6 +7,12 @@ function newContext(): ConversationContext {
   return createConversationContext('session-test', '2026-10-03T12:00:00.000Z');
 }
 
+/** The engine owns the logical turn counter; tests simulate its increment. */
+function turn(context: ConversationContext, input: string) {
+  context.currentTurn += 1;
+  return turn(context, input);
+}
+
 describe('Conversation Core determinism and state authority', () => {
   it('produces identical results for identical input, context, catalogue and rules', () => {
     const input = 'hoi elvie mn outlook doet t sinds vanochtend niet op laptop';
@@ -14,7 +20,7 @@ describe('Conversation Core determinism and state authority', () => {
     const factSnapshots: string[] = [];
     for (let i = 0; i < 3; i += 1) {
       const context = newContext();
-      const result = processEmployeeMessage(context, input);
+      const result = turn(context, input);
       results.push(JSON.stringify(result));
       factSnapshots.push(JSON.stringify(context.facts));
     }
@@ -26,7 +32,7 @@ describe('Conversation Core determinism and state authority', () => {
 
   it('never changes the authoritative conversation state', () => {
     const context = newContext();
-    processEmployeeMessage(context, 'Mijn Outlook doet het niet.');
+    turn(context, 'Mijn Outlook doet het niet.');
     expect(context.currentState).toBe('START');
   });
 });
@@ -34,7 +40,7 @@ describe('Conversation Core determinism and state authority', () => {
 describe('Corpus A: incidents', () => {
   it('understands "Mijn Outlook doet het niet." deterministically and asks for the device', () => {
     const context = newContext();
-    const { decision, classification } = processEmployeeMessage(context, 'Mijn Outlook doet het niet.');
+    const { decision, classification } = turn(context, 'Mijn Outlook doet het niet.');
     expect(classification.value).toBe('incident');
     expect(classification.confidence).toBe('high');
     expect(classification.evidence.length).toBeGreaterThan(0);
@@ -52,7 +58,7 @@ describe('Corpus A: incidents', () => {
 
   it('understands "De printer doet het niet." without requiring an application', () => {
     const context = newContext();
-    const { decision } = processEmployeeMessage(context, 'De printer doet het niet.');
+    const { decision } = turn(context, 'De printer doet het niet.');
     expect(decision.kind).toBe('sufficient_understanding');
     expect(getFact(context, 'device')).toMatchObject({ value: 'printer', kind: 'explicit' });
     expect(getFact(context, 'serviceOrApplication')).toBeUndefined();
@@ -66,7 +72,7 @@ describe('Corpus A: incidents', () => {
   it('understands the wifi laptop sentence without asking for the known device', () => {
     const context = newContext();
     const input = 'Mijn laptop op kantoor maakt sinds vanochtend geen verbinding met wifi.';
-    const { decision } = processEmployeeMessage(context, input);
+    const { decision } = turn(context, input);
     expect(decision.kind).toBe('sufficient_understanding');
     if (decision.kind === 'missing_information') {
       throw new Error('known device must never be requested again');
@@ -79,7 +85,7 @@ describe('Corpus A: incidents', () => {
 
   it('does not identify Teams as the broken application in "Outlook werkt niet maar Teams wel."', () => {
     const context = newContext();
-    const { decision } = processEmployeeMessage(context, 'Outlook werkt niet maar Teams wel.');
+    const { decision } = turn(context, 'Outlook werkt niet maar Teams wel.');
     expect(getFact(context, 'serviceOrApplication')?.value).toBe('Outlook');
     expect(JSON.stringify(context.facts)).not.toContain('"Teams"');
     expect(decision.kind).toBe('missing_information');
@@ -90,7 +96,7 @@ describe('Corpus A: incidents', () => {
 
   it('understands "Mijn laptop doet raar." without requiring an application', () => {
     const context = newContext();
-    const { decision } = processEmployeeMessage(context, 'Mijn laptop doet raar.');
+    const { decision } = turn(context, 'Mijn laptop doet raar.');
     expect(decision.kind).toBe('sufficient_understanding');
     expect(getFact(context, 'symptom')).toMatchObject({ value: 'erratic_behavior', sourceRuleId: 'symptom_erratic' });
   });
@@ -99,7 +105,7 @@ describe('Corpus A: incidents', () => {
 describe('Corpus B: requests', () => {
   it('understands "Ik wil een nieuwe muis." as a request for a mouse', () => {
     const context = newContext();
-    const { decision, classification } = processEmployeeMessage(context, 'Ik wil een nieuwe muis.');
+    const { decision, classification } = turn(context, 'Ik wil een nieuwe muis.');
     expect(classification.value).toBe('request');
     expect(decision.kind).toBe('sufficient_understanding');
     expect(getFact(context, 'requestedResource')).toMatchObject({ value: 'muis', kind: 'explicit' });
@@ -108,7 +114,7 @@ describe('Corpus B: requests', () => {
   it('understands a fictional shared mailbox access request', () => {
     const context = newContext();
     const input = 'Kan ik toegang krijgen tot de gedeelde mailbox Financiën?';
-    const { decision, classification } = processEmployeeMessage(context, input);
+    const { decision, classification } = turn(context, input);
     expect(classification.value).toBe('request');
     expect(decision.kind).toBe('sufficient_understanding');
     expect(getFact(context, 'requestedResource')).toMatchObject({ value: 'Mailbox', kind: 'explicit' });
@@ -116,7 +122,7 @@ describe('Corpus B: requests', () => {
 
   it('asks for the requested resource when the target is unknown', () => {
     const context = newContext();
-    const { decision } = processEmployeeMessage(context, 'Ik wil graag software laten installeren.');
+    const { decision } = turn(context, 'Ik wil graag software laten installeren.');
     expect(decision.kind).toBe('missing_information');
     if (decision.kind === 'missing_information') {
       expect(decision.nextQuestion.category).toBe('requestedResource');
@@ -128,7 +134,7 @@ describe('Corpus B: requests', () => {
 describe('Corpus C: security / phishing', () => {
   it('classifies "Ik heb een verdachte mail gekregen." as phishing with one indicator', () => {
     const context = newContext();
-    const { decision, classification } = processEmployeeMessage(context, 'Ik heb een verdachte mail gekregen.');
+    const { decision, classification } = turn(context, 'Ik heb een verdachte mail gekregen.');
     expect(classification.value).toBe('phishing');
     expect(classification.confidence).toBe('medium');
     expect(decision.kind).toBe('security_sensitive_route');
@@ -142,7 +148,7 @@ describe('Corpus C: security / phishing', () => {
   it('extracts both indicators for a suspicious link in a strange mail', () => {
     const context = newContext();
     const input = 'Ik heb op een link in een vreemde mail geklikt.';
-    const { decision } = processEmployeeMessage(context, input);
+    const { decision } = turn(context, input);
     expect(decision.kind).toBe('security_sensitive_route');
     if (decision.kind === 'security_sensitive_route') {
       expect(decision.indicators).toEqual(['suspicious_message_received', 'suspicious_link_clicked']);
@@ -152,7 +158,7 @@ describe('Corpus C: security / phishing', () => {
   it('extracts link-click plus credential indicators conservatively', () => {
     const context = newContext();
     const input = 'Ik heb op een link geklikt en daarna mijn wachtwoord ingevuld.';
-    const { decision, classification } = processEmployeeMessage(context, input);
+    const { decision, classification } = turn(context, input);
     expect(classification.value).toBe('phishing');
     expect(classification.confidence).toBe('high');
     expect(decision.kind).toBe('security_sensitive_route');
@@ -163,7 +169,7 @@ describe('Corpus C: security / phishing', () => {
 
   it('classifies "Volgens mij is mijn account gehackt." as suspected compromise', () => {
     const context = newContext();
-    const { decision } = processEmployeeMessage(context, 'Volgens mij is mijn account gehackt.');
+    const { decision } = turn(context, 'Volgens mij is mijn account gehackt.');
     expect(decision.kind).toBe('security_sensitive_route');
     if (decision.kind === 'security_sensitive_route') {
       expect(decision.indicators).toEqual(['suspected_account_compromise']);
@@ -172,7 +178,7 @@ describe('Corpus C: security / phishing', () => {
 
   it('does not turn an availability problem into phishing merely because mail is involved', () => {
     const context = newContext();
-    const { decision, classification } = processEmployeeMessage(context, 'Mijn mail werkt niet.');
+    const { decision, classification } = turn(context, 'Mijn mail werkt niet.');
     expect(classification.value).toBe('incident');
     expect(decision.kind).not.toBe('security_sensitive_route');
   });
@@ -181,7 +187,7 @@ describe('Corpus C: security / phishing', () => {
 describe('Corpus D: unknown / ambiguous', () => {
   it('keeps "Kun je me helpen?" safely unknown', () => {
     const context = newContext();
-    const { decision, classification } = processEmployeeMessage(context, 'Kun je me helpen?');
+    const { decision, classification } = turn(context, 'Kun je me helpen?');
     expect(classification.value).toBe('unknown');
     expect(classification.confidence).toBe('low');
     expect(decision.kind).toBe('unknown_understanding');
@@ -189,7 +195,7 @@ describe('Corpus D: unknown / ambiguous', () => {
 
   it('keeps a symptom without any subject safely unknown ("Het werkt niet.")', () => {
     const context = newContext();
-    const { decision, classification } = processEmployeeMessage(context, 'Het werkt niet.');
+    const { decision, classification } = turn(context, 'Het werkt niet.');
     expect(classification.value).toBe('unknown');
     expect(classification.confidence).toBe('low');
     expect(decision.kind).toBe('unknown_understanding');
@@ -197,7 +203,7 @@ describe('Corpus D: unknown / ambiguous', () => {
 
   it('keeps "Ik heb een vraag." safely unknown without inventing facts', () => {
     const context = newContext();
-    const { decision } = processEmployeeMessage(context, 'Ik heb een vraag.');
+    const { decision } = turn(context, 'Ik heb een vraag.');
     expect(decision.kind).toBe('unknown_understanding');
     expect(context.facts).toEqual({});
   });
@@ -207,7 +213,7 @@ describe('Corpus E: informal input', () => {
   it('processes informal Dutch input deterministically', () => {
     const context = newContext();
     const input = 'hoi elvie mn outlook doet t sinds vanochtend niet op laptop';
-    const { decision, classification } = processEmployeeMessage(context, input);
+    const { decision, classification } = turn(context, input);
     expect(classification.value).toBe('incident');
     expect(classification.confidence).toBe('high');
     expect(decision.kind).toBe('sufficient_understanding');
@@ -221,9 +227,9 @@ describe('Corpus E: informal input', () => {
 describe('Corpus F: corrections', () => {
   it('applies an explicit correction with markers and records the marker evidence', () => {
     const context = newContext();
-    processEmployeeMessage(context, 'Outlook werkt niet op mijn laptop.');
+    turn(context, 'Outlook werkt niet op mijn laptop.');
     expect(getFact(context, 'device')?.value).toBe('laptop');
-    processEmployeeMessage(context, 'Sorry, het is trouwens op mijn telefoon.');
+    turn(context, 'Sorry, het is trouwens op mijn telefoon.');
     const device = getFact(context, 'device');
     expect(device).toMatchObject({ value: 'telefoon', kind: 'explicit', capturedAtTurn: 2 });
     expect(device?.evidence).toContain('correction_marker');
@@ -231,8 +237,8 @@ describe('Corpus F: corrections', () => {
 
   it('applies a later explicit correction WITHOUT requiring sorry/trouwens/ik bedoel', () => {
     const context = newContext();
-    processEmployeeMessage(context, 'Outlook werkt niet op mijn laptop.');
-    processEmployeeMessage(context, 'Het is op mijn telefoon.');
+    turn(context, 'Outlook werkt niet op mijn laptop.');
+    turn(context, 'Het is op mijn telefoon.');
     const device = getFact(context, 'device');
     expect(device).toMatchObject({ value: 'telefoon', kind: 'explicit', capturedAtTurn: 2 });
     expect(device?.evidence).not.toContain('correction_marker');
@@ -240,10 +246,10 @@ describe('Corpus F: corrections', () => {
 
   it('replaces an earlier explicit device on the spec example without any intent yet', () => {
     const context = newContext();
-    const first = processEmployeeMessage(context, 'Het probleem is op mijn laptop.');
+    const first = turn(context, 'Het probleem is op mijn laptop.');
     expect(first.decision.kind).toBe('unknown_understanding');
     expect(getFact(context, 'device')?.value).toBe('laptop');
-    processEmployeeMessage(context, 'Het is op mijn telefoon.');
+    turn(context, 'Het is op mijn telefoon.');
     expect(getFact(context, 'device')).toMatchObject({ value: 'telefoon', kind: 'explicit', capturedAtTurn: 2 });
   });
 });
@@ -251,9 +257,9 @@ describe('Corpus F: corrections', () => {
 describe('Corpus G: ambiguity and clarification', () => {
   it('requests clarification for a multi-device answer when one device is required', () => {
     const context = newContext();
-    const first = processEmployeeMessage(context, 'Mijn Outlook doet het niet.');
+    const first = turn(context, 'Mijn Outlook doet het niet.');
     expect(first.decision.kind).toBe('missing_information');
-    const second = processEmployeeMessage(context, 'Het probleem speelt op mijn laptop en telefoon.');
+    const second = turn(context, 'Het probleem speelt op mijn laptop en telefoon.');
     expect(second.decision.kind).toBe('clarification_required');
     if (second.decision.kind === 'clarification_required') {
       expect(second.decision.fact).toBe('device');
@@ -265,9 +271,9 @@ describe('Corpus G: ambiguity and clarification', () => {
 
   it('does not request clarification when the ambiguous category is not required', () => {
     const context = newContext();
-    const first = processEmployeeMessage(context, 'De printer doet het niet.');
+    const first = turn(context, 'De printer doet het niet.');
     expect(first.decision.kind).toBe('sufficient_understanding');
-    const second = processEmployeeMessage(context, 'Het probleem speelt op mijn laptop en telefoon.');
+    const second = turn(context, 'Het probleem speelt op mijn laptop en telefoon.');
     expect(second.decision.kind).toBe('sufficient_understanding');
   });
 });
@@ -275,9 +281,9 @@ describe('Corpus G: ambiguity and clarification', () => {
 describe('never knowingly ask twice (core level)', () => {
   it('stops asking for the device as soon as it is known', () => {
     const context = newContext();
-    const first = processEmployeeMessage(context, 'Mijn Outlook doet het niet.');
+    const first = turn(context, 'Mijn Outlook doet het niet.');
     expect(first.decision.kind).toBe('missing_information');
-    const second = processEmployeeMessage(context, 'Op mijn laptop.');
+    const second = turn(context, 'Op mijn laptop.');
     expect(second.decision.kind).toBe('sufficient_understanding');
     expect(getFact(context, 'device')).toMatchObject({ value: 'laptop', kind: 'explicit', capturedAtTurn: 2 });
   });

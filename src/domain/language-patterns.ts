@@ -47,7 +47,7 @@ export const SECURITY_PHRASE_RULES: readonly SecurityPhraseRule[] = [
   },
   {
     ruleId: 'sec_link_clicked',
-    pattern: /\bop een link geklikt\b|\bgeklikt op een link\b|\blink aangeklikt\b|\bop een link gedrukt\b/,
+    pattern: /\bop een link geklikt\b|\bgeklikt op een link\b|\blink aangeklikt\b|\bop een link gedrukt\b|\bop een link\b[^.!?]*\bgeklikt\b/,
     indicator: 'suspicious_link_clicked',
   },
   {

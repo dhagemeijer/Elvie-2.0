@@ -81,7 +81,7 @@ describe('fact extraction (BUILD_02.md par. 2)', () => {
 
   it('extracts impact, urgency, affected users and attempted solutions deterministically', () => {
     const result = extract(
-      'Ik kan sinds vanochtend niet werken, collega’s hebben er ook last van, ik heb al een herstart geprobeerd en het is urgent.',
+      'Ik kan niet werken sinds vanochtend, collega’s hebben er ook last van, ik heb al een herstart geprobeerd en het is urgent.',
     );
     expect(factOf(result, 'impact')?.value).toBe('kan niet werken');
     expect(factOf(result, 'affectedUsers')?.sourceRuleId).toBe('fact_affected_colleagues');
