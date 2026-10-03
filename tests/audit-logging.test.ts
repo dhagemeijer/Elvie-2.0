@@ -54,8 +54,7 @@ describe('audit logging contract', () => {
     for (const sensitive of REPRESENTATIVE_SENSITIVE_STRINGS) {
       expect(serialized).not.toContain(sensitive);
     }
-    for (const pattern of SENSITIVE_VA
-LUE_PATTERNS) {
+    for (const pattern of SENSITIVE_VALUE_PATTERNS) {
       expect(pattern.test(serialized)).toBe(false);
     }
   });
