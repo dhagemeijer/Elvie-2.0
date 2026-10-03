@@ -1,0 +1,64 @@
+# Build 01 verification pipeline (development tooling only).
+# Runs the quality gates from BUILD_01.md on every push and pull request:
+# typecheck, lint, tests and production build. Also commits the dependency
+# lockfile. GitHub/source control is outside Elvie's production trust
+# boundary (ARCHITECTURE.md).
+name: verify
+
+on:
+  push:
+    branches: [build-01-application-foundation]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Tests
+        run: npm run test
+      - name: Production build
+        run: npm run build
+
+  lockfile:
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/build-01-application-foundation'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Generate lockfile
+        run: npm install --package-lock-only
+      - name: Commit lockfile if changed
+        run: |
+          git config user.name "elvie-ci"
+          git config user.email "elvie-ci@users.noreply.github.com"
+          git add package-lock.json
+          if git diff --cached --quiet; then
+            echo "Lockfile unchanged."
+          else
+            git commit -m "chore: update dependency lockfile [skip ci]"
+            git push
+          fi
