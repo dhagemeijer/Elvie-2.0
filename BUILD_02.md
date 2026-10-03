@@ -44,7 +44,8 @@ Unchanged from Build 00/Build 01 and restated here for the implementing change:
 - Elvie must not become a second TOPdesk catalogue/CMDB/knowledge store.
 - Knowledge search/ranking and guided resolution belong to **Build 03** and must NOT be implemented in Build 02.
 
-If implementation appears to require a change to ARCHITECTURE.md, SECURITY_PRINCIPLES.md or AUDIT_LOGGING.md, stop and report the conflict instead of silently modifying those documents.
+If implementation appears to require a change to ARCHITECTURE.md,
+ SECURITY_PRINCIPLES.md or AUDIT_LOGGING.md, stop and report the conflict instead of silently modifying those documents.
 
 ## Domain model changes
 
@@ -94,13 +95,12 @@ Every extracted fact distinguishes:
 
 Every fact (explicit or derived) is stored as a structured record, not a bare string:
 
-```ts
-interface FactRecord<T = string> {
+```tsinterface FactRecord<T = string> {
   value: T;                       // canonical value
   kind: 'explicit' | 'derived';
   sourceRuleId?: string;           // for derived facts: the rule that concluded it
   evidence?: readonly string[];    // concise matched spans / rule evidence
-  capturedAt: string;              // logical turn marker (turn index), not wall-clock dependent logic
+  capturedAtTurn: number;           // logical conversation turn ordering (1-based); NOT wall-clock time
 }
 ```
 
@@ -117,16 +117,16 @@ Explicit precedence rules, implemented as merge logic in the Conversation Core:
 
 1. An **explicit** employee statement takes precedence over an **inferred/derived** value.
 2. An inferred value must never silently overwrite an explicit value.
-3. A **later explicit correction** replaces an earlier explicit value (last-explicit-wins among explicit values).
+3. A **later explicit correction** replaces an earlier explicit value: within the same fact category, a later explicit fact replaces an earlier explicit fact whenever the new utterance unambiguously supplies a new value for that category. Correction markers ("sorry", "trouwens", "ik bedoel") may strengthen/confirm correction detection but are NOT required.
 4. Conflicting information is handled deterministically: a documented precedence order (turn order for explicit facts; explicit > derived) resolves every merge without guessing.
-5. Uncertainty is never silently resolved by guessing: if two explicit statements conflict without a clear later-correction signal, the fact is marked as needing clarification (see Conversation Decision `clarification_required`) rather than silently picking one.
+5. Uncertainty is never silently resolved by guessing: `clarification_required` is used only when the new information is genuinely ambiguous for the required fact. Example: "Het probleem speelt op mijn laptop en telefoon." may require clarification when the active rule requires one specific device.
 
 Conceptual example:
 
-> Turn 1: "Outlook werkt niet op mijn laptop."
-> Turn 2: "Sorry, het is op mijn telefoon."
+> Turn 1: "Het probleem is op mijn laptop."
+> Turn 2: "Het is op mijn telefoon."
 
-The active device becomes `telefoon` (turn 2 is the later explicit correction). This is representable without permanently storing complete conversation transcripts: the ConversationContext keeps only the current active FactRecord per fact category plus the minimal evidence needed to explain it; superseded values are replaced, not archived as transcript.
+The active device becomes `telefoon` (turn 2 unambiguously supplies a new explicit value for the same category, without any correction marker). This also holds for "Outlook werkt niet op mijn laptop." → "Sorry, het is op mijn telefoon."; there the marker only strengthens detection. This is representable without permanently storing complete conversation transcripts: the ConversationContext keeps only the current active FactRecord per fact category plus the minimal evidence needed to explain it; superseded values are replaced, not archived as transcript.
 
 ### 4. Recognition catalog
 
@@ -138,8 +138,7 @@ Build 02 uses controlled **fictional/generic** recognition vocabulary for develo
 
 The Conversation Core must NOT hard-code a permanent copy of the LV/TOPdesk service catalogue. Instead define a clean domain abstraction:
 
-```ts
-interface RecognitionCatalog {
+```tsinterface RecognitionCatalog {
   applications: readonly CatalogEntry[];   // canonical name + aliases
   devices: readonly CatalogEntry[];
   locations?: readonly CatalogEntry[];
@@ -156,15 +155,31 @@ Build 02 ships a small fictional/generic catalog as mock/dev configuration (and 
 
 Core Build 02 capability:
 
-```text
-known facts + requirements(current intent/situation) → missing facts
+```textknown facts + requirements(current intent/situation) → missing facts
     → highest-priority missing fact → next question
 ```
 
 Design:
 
-- A deterministic **requirement model**: per intent, a fixed, ordered list of required fact categories (e.g. incident: application/device, symptom; plus intake prerequisites location, impact, urgency as defined in Build 04's fuller intake — Build 02 defines the requirement model, the concrete rule configuration is fictional and test-only).
-- The engine subtracts facts already reliably known (explicit or confidently derived) from the requirement list, in fixed priority order, yielding `missingFacts`.
+- A deterministic **conditional requirement model**: NOT one static required-fact list per intent (that would cause Elvie to ask irrelevant questions). Missing facts are calculated from:
+
+```text
+intent
+  + known facts
+  + recognized subject (service/application/device where relevant)
+  + applicable requirement rules
+  → missing facts
+  → highest-priority relevant missing fact
+```
+
+- **Requirement rules** are deterministic, ordered rules that conditionally apply based on the intent, the known facts and the recognized subject. Required rule behavior (fictional Build 02 rule set):
+  - a **printer** incident must not require an application;
+  - an **account** problem must not automatically require a device;
+  - an **application** problem may require a device only where the applicable rule says it is relevant;
+  - an **access request** requires the requested resource/target;
+  - a **security** case uses the applicable security clarification requirements (e.g. when indicators are already sufficient, no further security questions).
+- The engine evaluates the applicable rules in fixed order and subtracts facts already reliably known (explicit or confidently derived), yielding the relevant `missingFacts` in priority order.
+- Build 02 implements this mechanism plus a small fictional rule set; full production intake requirements remain **Build 04**.
 - The highest-priority missing fact maps deterministically to the next question.
 
 **NEVER KNOWINGLY ASK TWICE** is implemented as actual business logic: before proposing a question for fact category X, the engine checks whether the ConversationContext already contains a reliable answer for X (explicit FactRecord, or a derived FactRecord, or a recorded answer). If so, X is not missing and no question is produced. This must be implemented in the Conversation Core (not merely in UI behavior) and must have positive and negative tests:
@@ -178,13 +193,13 @@ The existing Build 01 `answers` map (question-keyed) is retained and integrated 
 
 A typed, deterministic result of the Conversation Core:
 
-```ts
-type ConversationDecision =
+```tstype ConversationDecision =
   | { kind: 'sufficient_understanding' }        // enough to continue to next state action
   | { kind: 'missing_information'; missingFacts: readonly FactCategory[]; nextQuestion: QuestionForFact }
   | { kind: 'clarification_required'; fact: FactCategory; reason: string }  // deterministic conflict/ambiguity
   | { kind: 'security_sensitive_route'; indicators: readonly SecurityIndicator[] }
-  | { kind: 'unknown_understanding' };          // unsupported / insufficient input; ask for clarification, stay in state
+  | { kind: 'unknown_understanding' };          // unsupported / insufficient input; 
+ask for clarification, stay in state
 ```
 
 This is NOT an alternative state machine. The ConversationState lifecycle (START → UNDERSTAND → …) remains authoritative; the decision describes what information/action is appropriate within the current state. State transitions remain only via the Build 01 state machine.
@@ -216,18 +231,16 @@ Build 01 ConversationContext has `confidence?: number` on the whole context. Bui
 
 Target conceptual model:
 
-```text
-facts       — FactRecord per category (explicit/derived, with evidence)
+```textfacts       — FactRecord per category (explicit/derived, with evidence)
 conclusions — intent classification record + derived facts (each: value, source, confidence, evidence)
 answers     — retained Build 01 answer map (question-keyed)
 ```
 
 **Migration (explicit):**
 
-- The field `confidence?: number` on ConversationContext is **removed** in Build 02 (with this approval), replaced by per-record qualitative confidence (`high` | `medium` | `low`) on the intent classification and on derived FactRecords.
+- The field `confidence?: number` on ConversationContext is **removed** in Build 02 (**approved at specification review**), replaced by per-record qualitative confidence (`high` | `medium` | `low`) on the intent classification and on derived FactRecords. No deprecated compatibility field is kept: there is no persisted production conversation model yet.
 - This is a typed-domain change to `src/domain/conversation-context.ts`. Build 01 code referencing `context.confidence` must be updated in the same change; existing Build 01 tests are updated accordingly where they assert the old field (behavior otherwise unchanged).
 - No persistence format exists yet, so there is no runtime data migration; only a source/type migration, covered by updated tests.
-- If reviewers prefer a softer path (deprecate-and-keep), that must be decided at review; the proposed default is removal with a clean type migration documented in the Build 02 implementation note.
 
 ### 9. Input normalisation
 
@@ -238,7 +251,7 @@ Build 02 tolerates ordinary informal Dutch employee input without pretending to 
 - simple punctuation stripping (period, comma, question mark, exclamation mark, quotes);
 - explicitly defined alias/variant folding via the RecognitionCatalog and a small documented contraction map (e.g. "mn" → "mijn", "'t" → "het", "doet t" → "doet het") — each alias explicitly listed, nothing probabilistic.
 
-Example: "hoi elvie mn outlook doet t sinds vanochtend niet op laptop" must remain reasonably processable after normalisation.
+This deliberately small deterministic map is **approved at specification review** and must not be expanded substantially in this specification. Example: "hoi elvie mn outlook doet t sinds vanochtend niet op laptop" must remain reasonably processable after normalisation.
 
 No large NLP framework; no fuzzy probabilistic language interpretation; no stemming library unless clearly justified at review (default: none).
 
@@ -362,10 +375,10 @@ After eventual implementation, Vibe must report:
 
 ## Open design decisions (for review, decided before implementation)
 
-1. **Confidence migration:** proposed default is removal of `confidence?: number` with a clean type migration (§8). Confirm or instruct deprecation path.
-2. **Requirement model contents:** the exact required-fact lists per intent are configuration-like data; Build 02 proposes a minimal fictional set (incident: application/device + symptom; request: requested item/service; phishing: indicators) — confirm before implementation.
-3. **Correction detection:** turn-2 corrections are recognized via explicit correction markers ("sorry", "trouwens", "het is op …") — the marker list is deliberately small and documented; confirm sufficiency.
-4. **Contraction map scope:** the informal-Dutch variant list (§9) is intentionally minimal; reviewers may extend it with additional fictional entries.
+1. **Confidence migration:** DECIDED — removal of `confidence?: number` with a clean type migration (§8); approved at specification review; no compatibility field.
+2. **Requirement model contents:** DECIDED — the conditional requirement model (§5) replaces static per-intent lists; Build 02 implements the mechanism plus a small fictional conditional rule set (printer/account/application/access/security rule behavior as specified).
+3. **Correction detection:** DECIDED — corrections do not depend on markers; a later explicit fact that unambiguously supplies a new value for the same category replaces the earlier one (§3). Markers may strengthen detection but are not required; `clarification_required` only for genuine ambiguity.
+4. **Contraction map scope:** DECIDED — the intentionally minimal informal-Dutch variant list (§9) is approved; not expanded substantially in this specification.
 
 ## Deliverables (this task)
 
