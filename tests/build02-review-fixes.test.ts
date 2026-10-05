@@ -47,7 +47,7 @@ describe('Review fix 1: qualitative confidence on derived facts', () => {
     const symptom = factOf(result, 'symptom');
     expect(symptom).toMatchObject({ kind: 'derived', confidence: 'medium' });
     expect(symptom?.sourceRuleId).toBeDefined();
-    expect(symptom?.evidence.length).toBeGreaterThan(0);
+    expect(symptom?.evidence?.length ?? 0).toBeGreaterThan(0);
   });
 
   it('marks derived security indicators with high confidence (fails without the confidence fix)', () => {
