@@ -82,7 +82,8 @@ describe('Review fix 2: conservative security indicator composition (classificat
   });
 
   it('does not conclude phishing from credentials alone ("ingevoerd")', () => {
-    const result = classify('Ik heb mijn wachtwoord ingevoerd.');
+    const result = classify('Ik
+ heb mijn wachtwoord ingevoerd.');
     expect(result.value).toBe('unknown');
     expect(result.confidence).toBe('low');
   });
