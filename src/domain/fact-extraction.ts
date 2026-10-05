@@ -12,6 +12,7 @@ import type { ConversationIntent } from './intent-classification';
 import {
   AFFECTED_USERS_PHRASE_RULES,
   ATTEMPTED_SOLUTIONS_PHRASE_RULES,
+  CREDENTIALS_ENTERED_RULE,
   IMPACT_PHRASE_RULES,
   LOCATION_PHRASE_RULES,
   SECURITY_PHRASE_RULES,
@@ -112,6 +113,10 @@ export function extractFacts(
   }
 
   // Security indicators (derived; evidence carries the safe rule ids).
+  // Composition (review fix): the composite indicator
+  // credentials_entered_after_suspicious_link is concluded ONLY when the
+  // credentials-entered signal AND the link-click signal are both present in
+  // this message. Credentials alone never assert the link relationship.
   const indicators: SecurityIndicator[] = [];
   const indicatorRuleIds: string[] = [];
   for (const rule of SECURITY_PHRASE_RULES) {
@@ -120,12 +125,19 @@ export function extractFacts(
       indicatorRuleIds.push(rule.ruleId);
     }
   }
+  const credentialsEntered = CREDENTIALS_ENTERED_RULE.pattern.test(normalizedInput);
+  const linkClicked = indicators.includes('suspicious_link_clicked');
+  if (credentialsEntered && linkClicked) {
+    indicators.push('credentials_entered_after_suspicious_link');
+    indicatorRuleIds.push('sec_credentials_entered');
+  }
   if (indicators.length > 0) {
     facts.push({
       category: 'securityIndicators',
       record: {
         value: [...new Set(indicators)].join(', '),
         kind: 'derived',
+        confidence: 'high',
         sourceRuleId: 'security_indicator_aggregate',
         evidence: [...new Set(indicatorRuleIds)],
         capturedAtTurn,
@@ -140,7 +152,14 @@ export function extractFacts(
     if (value !== undefined) {
       facts.push({
         category: 'symptom',
-        record: { value, kind: 'derived', sourceRuleId: symptom.ruleId, evidence: [symptom.matched], capturedAtTurn },
+        record: {
+          value,
+          kind: 'derived',
+          confidence: 'medium',
+          sourceRuleId: symptom.ruleId,
+          evidence: [symptom.matched],
+          capturedAtTurn,
+        },
       });
     }
   }

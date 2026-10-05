@@ -51,16 +51,25 @@ export const SECURITY_PHRASE_RULES: readonly SecurityPhraseRule[] = [
     indicator: 'suspicious_link_clicked',
   },
   {
-    ruleId: 'sec_credentials_entered',
-    pattern: /\bwachtwoord ingevuld\b|\bwachtwoord ingevoerd\b|\binloggegevens ingevuld\b/,
-    indicator: 'credentials_entered_after_suspicious_link',
-  },
-  {
     ruleId: 'sec_account_compromise',
     pattern: /\bgehackt\b|\baccount overgenomen\b|\bin gebroken\b/,
     indicator: 'suspected_account_compromise',
   },
 ];
+
+/**
+ * Simple "credentials entered" signal. On its own this proves ONLY that
+ * credentials were entered, never that a suspicious link was involved
+ * (review fix, conservative security detection). The composite indicator
+ * credentials_entered_after_suspicious_link is composed deterministically
+ * only when the link-click signal is present in the same message (see
+ * intent-classification.ts and fact-extraction.ts); no single phrase can
+ * assert that relationship by itself.
+ */
+export const CREDENTIALS_ENTERED_RULE: PhraseRule = {
+  ruleId: 'sec_credentials_entered',
+  pattern: /\bwachtwoord ingevuld\b|\bwachtwoord ingevoerd\b|\binloggegevens ingevuld\b/,
+};
 
 export const REQUEST_PHRASE_RULES: readonly PhraseRule[] = [
   { ruleId: 'req_phrase_want', pattern: /\bik wil\b|\bkan ik\b|\bgraag\b|\baanvragen\b|\breserveren\b/ },

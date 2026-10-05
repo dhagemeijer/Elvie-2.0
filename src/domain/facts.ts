@@ -38,6 +38,14 @@ export interface FactRecord {
   readonly value: string;
   /** explicit = supplied by the employee; derived = deterministic conclusion. */
   readonly kind: 'explicit' | 'derived';
+  /**
+   * Qualitative confidence, REQUIRED on derived facts (BUILD_02.md): a
+   * deterministic conclusion always carries high | medium | low. Explicit
+   * facts are employee statements and need no inferred confidence. Never
+   * numeric or pseudo-statistical; the former ConversationContext.confidence
+   * scalar is not reintroduced.
+   */
+  readonly confidence?: QualitativeConfidence;
   /** For derived facts: the rule that concluded the value. */
   readonly sourceRuleId?: string;
   /** Concise matched evidence (text span or rule id); never a reasoning trace. */

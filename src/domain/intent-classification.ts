@@ -12,6 +12,7 @@
  */
 import type { QualitativeConfidence } from './facts';
 import {
+  CREDENTIALS_ENTERED_RULE,
   REQUEST_PHRASE_RULES,
   SECURITY_PHRASE_RULES,
   SYMPTOM_PHRASE_RULES,
@@ -59,12 +60,23 @@ export function classifyIntent(
     SECURITY_PHRASE_RULES.map((rule) => ({ ruleId: rule.ruleId, pattern: rule.pattern })),
     normalizedInput,
   );
-  if (securityEvidence.length > 0) {
-    const onlySuspiciousMessage = securityEvidence.every((e) => e.ruleId === 'sec_suspicious_message');
+  // Composition (review fix): credentials being entered only evidences the
+  // suspicious-link relationship when the link-click signal is present in
+  // the same message. Credentials alone NEVER establish phishing.
+  const credentialsMatch = CREDENTIALS_ENTERED_RULE.pattern.exec(normalizedInput);
+  const linkClicked = securityEvidence.some((e) => e.ruleId === 'sec_link_clicked');
+  const compositeEvidence: IntentEvidence[] =
+    credentialsMatch !== null && linkClicked
+      ? [{ ruleId: 'sec_credentials_composite', matched: credentialsMatch[0] }]
+      : [];
+  if (securityEvidence.length > 0 || compositeEvidence.length > 0) {
+    const evidence = [...securityEvidence, ...compositeEvidence];
+    const onlySuspiciousMessage =
+      compositeEvidence.length === 0 && evidence.every((e) => e.ruleId === 'sec_suspicious_message');
     return {
       value: 'phishing',
       confidence: onlySuspiciousMessage ? 'medium' : 'high',
-      evidence: securityEvidence,
+      evidence,
     };
   }
 
