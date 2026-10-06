@@ -63,6 +63,7 @@ describe('typed ConversationDecision (not a second state machine)', () => {
     setFactRecord(context, 'securityIndicators', {
       value: 'suspicious_link_clicked, credentials_entered_after_suspicious_link',
       kind: 'derived',
+      confidence: 'high',
       sourceRuleId: 'security_indicator_aggregate',
       evidence: ['sec_link_clicked', 'sec_credentials_entered'],
       capturedAtTurn: 1,

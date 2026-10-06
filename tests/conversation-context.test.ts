@@ -33,6 +33,7 @@ describe('ConversationContext', () => {
     const derived: FactRecord = {
       value: 'not_working',
       kind: 'derived',
+      confidence: 'medium',
       sourceRuleId: 'symptom_not_working',
       evidence: ['doet het niet'],
       capturedAtTurn: 2,

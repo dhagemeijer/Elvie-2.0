@@ -30,7 +30,7 @@ function addDerivedFact(
   value: string,
   sourceRuleId: string,
 ): void {
-  setFactRecord(context, category, { value, kind: 'derived', sourceRuleId, capturedAtTurn: 1 });
+  setFactRecord(context, category, { value, kind: 'derived', confidence: 'medium', sourceRuleId, evidence: [sourceRuleId], capturedAtTurn: 1 });
 }
 
 describe('conditional requirement model (never a static per-intent list)', () => {
