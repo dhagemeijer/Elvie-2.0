@@ -8,7 +8,9 @@ name: verify
 
 on:
   push:
-    branches: [build-01-application-foundation]
+    branches:
+      - build-01-application-foundation
+      - build-02-conversation-core
   pull_request:
 
 permissions:

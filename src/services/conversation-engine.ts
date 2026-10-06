@@ -1,5 +1,12 @@
 import type { ConversationContext, ConversationFactValue } from '../domain/conversation-context';
-import { createConversationContext, getAnswer, recordAnswer } from '../domain/conversation-context';
+import {
+  createConversationContext,
+  getAnswer,
+  getFact,
+  recordAnswer,
+  setFactRecord,
+} from '../domain/conversation-context';
+import { processEmployeeMessage } from '../domain/conversation-core';
 import { applyTransition } from '../domain/state-machine';
 import type { IdentityPort } from '../ports/identity';
 import type { IncidentPort } from '../ports/incident';
@@ -10,7 +17,7 @@ import { containsSensitiveValue } from '../security/sensitive-values';
 import { APP_VERSION, COMPONENT_CONVERSATION_ENGINE } from '../support/app-info';
 import { makeId, nowIso } from '../support/ids';
 
-/** Message roles for the chat shell. `error` is a user-safe failure state. */
+/** Message roles for the chat shell. \u0060error\u0060 is a user-safe failure state. */
 export type ChatMessageRole = 'elvie' | 'employee' | 'error';
 export interface ChatMessage {
   readonly role: ChatMessageRole;
@@ -26,12 +33,13 @@ export interface ConversationEngineDeps {
 }
 
 /**
- * Deterministic conversation skeleton for Build 01.
+ * Deterministic conversation engine.
  *
- * Build 01 establishes the typed lifecycle and controlled transitions; the
- * final intelligence/rules per state (intent detection, entity extraction,
- * ranking) arrive in Builds 02-03 per ROADMAP.md. This engine walks the
- * structural lifecycle deterministically through the mock ports.
+ * Build 02: the UNDERSTAND phase is powered by the deterministic Conversation
+ * Core (normalisation, intent classification, fact extraction, conditional
+ * missing-information calculation, typed decision). The engine only decides
+ * WHEN to move between the authoritative Build 01 lifecycle states; it never
+ * invents new transitions. Build 03 adds real knowledge ranking/resolution.
  */
 export class ConversationEngine {
   private context: ConversationContext | null = null;
@@ -52,7 +60,7 @@ export class ConversationEngine {
       return [
         {
           role: 'elvie',
-          text: `Hallo ${employee.displayName}! Ik ben Elvie, de digitale assistent van de IT-servicebalie.`,
+          text: 'Hallo ' + employee.displayName + '! Ik ben Elvie, de digitale assistent van de IT-servicebalie.',
         },
         { role: 'elvie', text: 'Waarmee kan ik je helpen? Beschrijf je vraag of probleem.' },
       ];
@@ -104,8 +112,12 @@ export class ConversationEngine {
       ];
     }
 
+    // Logical turn ordering (1-based; NOT wall-clock time).
+    context.currentTurn += 1;
+
     switch (context.currentState) {
       case 'START':
+      case 'UNDERSTAND':
         return this.handleUnderstand(text);
       case 'KNOWLEDGE_SEARCH':
         return this.handleSolvedQuestion(text);
@@ -125,15 +137,46 @@ export class ConversationEngine {
 
   // --- State handlers -----------------------------------------------------
 
+  /**
+   * UNDERSTAND: run the deterministic Conversation Core and follow its
+   * decision. Insufficient understanding keeps the conversation in
+   * UNDERSTAND (a clarifying/next question); sufficient understanding and
+   * the security-sensitive route continue to KNOWLEDGE_SEARCH. No new
+   * lifecycle transitions are invented.
+   */
   private async handleUnderstand(text: string): Promise<readonly ChatMessage[]> {
     const context = this.requireContext();
-    recordAnswer(context, 'initial_question', text);
-    context.intent = 'unknown';
-    applyTransition(context, 'UNDERSTAND');
+    if (context.currentState === 'START') {
+      applyTransition(context, 'UNDERSTAND');
+    }
+    if (context.currentTurn === 1) {
+      recordAnswer(context, 'initial_question', text);
+    }
+
+    const { decision } = processEmployeeMessage(context, text);
+    // Safe diagnostics only: decision category, never raw input content.
+    this.operational('info', 'employee message processed', 'success', decision.kind);
+
+    switch (decision.kind) {
+      case 'unknown_understanding':
+        return [{ role: 'elvie', text: decision.text }];
+      case 'missing_information':
+        return [{ role: 'elvie', text: decision.nextQuestion.text }];
+      case 'clarification_required':
+        return [{ role: 'elvie', text: decision.text }];
+      case 'security_sensitive_route':
+      case 'sufficient_understanding':
+        return this.searchKnowledge();
+    }
+  }
+
+  /** KNOWLEDGE_SEARCH: consult the knowledge port (mock in Build 01/02). */
+  private async searchKnowledge(): Promise<readonly ChatMessage[]> {
+    const context = this.requireContext();
     applyTransition(context, 'KNOWLEDGE_SEARCH');
     this.operational('info', 'searching knowledge', 'success');
 
-    const results = await this.deps.knowledge.search({ text });
+    const results = await this.deps.knowledge.search({ text: String(getAnswer(context, 'initial_question') ?? '') });
     if (results.length > 0) {
       return [
         { role: 'elvie', text: 'Ik heb mogelijk bruikbare instructies gevonden:' },
@@ -173,7 +216,11 @@ export class ConversationEngine {
   private async handleIntake(text: string): Promise<readonly ChatMessage[]> {
     const context = this.requireContext();
     recordAnswer(context, 'symptom_description', text);
-    context.symptom = text;
+    setFactRecord(context, 'symptom', {
+      value: text,
+      kind: 'explicit',
+      capturedAtTurn: context.currentTurn,
+    });
     applyTransition(context, 'COMPLETE_CONTEXT');
     return [{ role: 'elvie', text: 'Dank je. Op welke locatie ben je op dit moment?' }];
   }
@@ -181,12 +228,22 @@ export class ConversationEngine {
   private async handleCompleteContext(text: string): Promise<readonly ChatMessage[]> {
     const context = this.requireContext();
     recordAnswer(context, 'location', text);
-    context.location = text;
+    setFactRecord(context, 'location', {
+      value: text,
+      kind: 'explicit',
+      capturedAtTurn: context.currentTurn,
+    });
     applyTransition(context, 'PREVIEW');
     return [
       {
         role: 'elvie',
-        text: `Dit is een voorbeeld van je melding:\n\nSamenvatting: ${buildSummary(context)}\nLocatie: ${context.location ?? 'onbekend'}\n\nTyp 'versturen' om de melding definitief aan te maken.`,
+        text:
+          'Dit is een voorbeeld van je melding:\n\n' +
+          'Samenvatting: ' +
+          buildSummary(context) +
+          '\nLocatie: ' +
+          (getFact(context, 'location')?.value ?? 'onbekend') +
+          "\n\nTyp 'versturen' om de melding definitief aan te maken.",
       },
     ];
   }
@@ -204,7 +261,7 @@ export class ConversationEngine {
       summary: buildSummary(context),
       description: String(getAnswer(context, 'symptom_description') ?? ''),
       context: {
-        locatie: context.location ?? '',
+        locatie: getFact(context, 'location')?.value ?? '',
         startedAt: context.startedAt,
       },
     };
@@ -225,7 +282,7 @@ export class ConversationEngine {
         }),
       );
       this.operational('info', 'incident submitted', 'success');
-      return [{ role: 'elvie', text: `Je melding is aangemaakt met referentie ${result.reference}. Fijne dag!` }];
+      return [{ role: 'elvie', text: 'Je melding is aangemaakt met referentie ' + result.reference + '. Fijne dag!' }];
     } catch (error) {
       const reason = error instanceof Error ? error.name : 'unknown';
       this.auditSafe(
@@ -288,11 +345,11 @@ export class ConversationEngine {
 }
 
 function renderKnowledgeItem(item: KnowledgeItem): ChatMessage {
-  return { role: 'elvie', text: `- ${item.title}: ${item.summary}` };
+  return { role: 'elvie', text: '- ' + item.title + ': ' + item.summary };
 }
 
 function buildSummary(context: ConversationContext): string {
   const fact = (key: string): ConversationFactValue | undefined => getAnswer(context, key);
-  const initial = String(fact('initial_question') ?? context.symptom ?? '');
+  const initial = String(fact('initial_question') ?? getFact(context, 'symptom')?.value ?? '');
   return initial.length > 0 ? initial.slice(0, 80) : 'IT-vraag';
 }

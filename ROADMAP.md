@@ -13,7 +13,7 @@ Planned: TypeScript project structure; separation of UI, conversation domain, se
 Acceptance focus: architecture and tests, not feature quantity. No real Entra/TOPdesk integration and no production admin interface yet.
 
 ## Build 02 — Conversation Core
-Planned: incident/request/phishing intent handling; deterministic entity/context extraction; missing-information calculation; “never knowingly ask twice”; device/application recognition; impact and urgency rules; explicit confidence/fallback behavior.
+Planned: incident/request/phishing intent handling; deterministic entity/context extraction; missing-information calculation; “never knowingly ask twice”; device/application recognition; impact and urgency rules; explicit-vs-derived fact precedence with later corrections; qualitative per-conclusion confidence with evidence. Specification: [BUILD_02.md](BUILD_02.md).
 
 ## Build 03 — Knowledge & Resolution
 Planned: TOPdesk Knowledge abstraction; mock implementation first; ranked deterministic matching; guided resolution; solved/not-solved feedback; transition to intake when self-service fails.
@@ -22,7 +22,8 @@ Planned: TOPdesk Knowledge abstraction; mock implementation first; ranked determ
 Planned: context-specific intake; TOPdesk-independent routing model; incident payload mapping in adapter; ticket preview/edit/confirm. Attachments only after organizational requirements are known.
 
 ## Build 05 — Microsoft Identity, Authorization & Management Boundary
-Planned: Entra ID integration in approved LV environment; employee and administrative authorization boundaries; minimal management surface only where Elvie-specific management is required; removal of production mock identity; negative authorization tests; administrative audit events.
+Planned: Entra ID integration in approved LV environment; employee and administrative authorization boundaries; minimal manageme
+nt surface only where Elvie-specific management is required; removal of production mock identity; negative authorization tests; administrative audit events.
 
 ## Build 06 — TOPdesk Test Integration
 Planned: verify TOPdesk KM API against LV test environment; Incident Management integration; secure credential handling; caller mapping; failure handling; integration tests using non-production data.
