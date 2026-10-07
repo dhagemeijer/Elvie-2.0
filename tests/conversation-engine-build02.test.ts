@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import type { KnowledgePort, KnowledgeSearchQuery, KnowledgeSearchResponse } from '../src/ports/knowledge';
 import { ConversationEngine } from '../src/services/conversation-engine';
 import { MockIdentityProvider } from '../src/mocks/mock-identity';
-import { MockIncidentProvider } from '../src/mocks/mock-incident';
 import { MockKnowledgeProvider } from '../src/mocks/mock-knowledge';
+import { MockTicketProvider } from '../src/mocks/mock-ticket';
 import { InMemoryAuditLogger } from '../src/mocks/in-memory-audit-logger';
 import type { OperationalLogEntry, OperationalLoggerPort } from '../src/ports/logging';
 
@@ -14,23 +15,37 @@ class CapturingOperationalLogger implements OperationalLoggerPort {
   }
 }
 
+/** Knowledge stub that records every port call (phishing bypass assertion). */
+class RecordingKnowledgeProvider implements KnowledgePort {
+  readonly queries: KnowledgeSearchQuery[] = [];
+  constructor(private readonly response: KnowledgeSearchResponse = { results: [], outcome: 'no_results' }) {}
+  async search(query: KnowledgeSearchQuery): Promise<KnowledgeSearchResponse> {
+    this.queries.push(query);
+    return this.response;
+  }
+}
+
 function createTestEngine(): {
   engine: ConversationEngine;
   operational: CapturingOperationalLogger;
   audit: InMemoryAuditLogger;
-  incidents: MockIncidentProvider;
+  tickets: MockTicketProvider;
 } {
   const operational = new CapturingOperationalLogger();
   const audit = new InMemoryAuditLogger();
-  const incidents = new MockIncidentProvider();
+  const tickets = new MockTicketProvider();
   const engine = new ConversationEngine({
     identity: new MockIdentityProvider(),
     knowledge: new MockKnowledgeProvider(),
-    incidents,
+    ticket: tickets,
     operational,
     audit,
   });
-  return { engine, operational, audit, incidents };
+  return { engine, operational, audit, tickets };
+}
+
+function text(messages: readonly { text: string }[]): string {
+  return messages.map((message) => message.text).join('\n');
 }
 
 describe('ConversationEngine Build 02 integration', () => {
@@ -38,11 +53,11 @@ describe('ConversationEngine Build 02 integration', () => {
     const { engine } = createTestEngine();
     await engine.start();
     const first = await engine.handleEmployeeInput('Mijn Outlook doet het niet.');
-    expect(first.some((m) => m.text.includes('Op welk apparaat'))).toBe(true);
+    expect(text(first)).toContain('Op welk apparaat');
     const second = await engine.handleEmployeeInput('op mijn laptop');
-    expect(second.some((m) => m.text.includes('Op welk apparaat'))).toBe(false);
-    // Sufficient understanding continues to the existing Build 01 flow:
-    expect(second.some((m) => m.text.includes('geen instructies'))).toBe(true);
+    expect(text(second)).not.toContain('Op welk apparaat');
+    // Sufficient understanding continues to the Build 03 knowledge flow:
+    expect(text(second)).toContain('opgelost');
   });
 
   it('never asks for an already-known device (wifi laptop sentence)', async () => {
@@ -51,28 +66,40 @@ describe('ConversationEngine Build 02 integration', () => {
     const reply = await engine.handleEmployeeInput(
       'Mijn laptop op kantoor maakt sinds vanochtend geen verbinding met wifi.',
     );
-    expect(reply.some((m) => m.text.includes('Op welk apparaat'))).toBe(false);
-    expect(reply.some((m) => m.text.includes('geen instructies'))).toBe(true);
+    expect(text(reply)).not.toContain('Op welk apparaat');
+    expect(text(reply)).toContain('opgelost');
   });
 
   it('keeps unknown input in UNDERSTAND and recovers on the next message', async () => {
     const { engine } = createTestEngine();
     await engine.start();
     const unknown = await engine.handleEmployeeInput('Kun je me helpen?');
-    expect(unknown.some((m) => m.text.includes('begrijp'))).toBe(true);
+    expect(text(unknown)).toContain('begrijp');
     const next = await engine.handleEmployeeInput('Mijn Outlook doet het niet.');
-    expect(next.some((m) => m.text.includes('Op welk apparaat'))).toBe(true);
+    expect(text(next)).toContain('Op welk apparaat');
   });
 
-  it('routes a phishing report conservatively and never submits an incident automatically', async () => {
-    const { engine, audit, incidents } = createTestEngine();
+  it('routes a phishing report conservatively, bypassing the knowledge port', async () => {
+    const operational = new CapturingOperationalLogger();
+    const audit = new InMemoryAuditLogger();
+    const tickets = new MockTicketProvider();
+    const knowledge = new RecordingKnowledgeProvider();
+    const engine = new ConversationEngine({
+      identity: new MockIdentityProvider(),
+      knowledge,
+      ticket: tickets,
+      operational,
+      audit,
+    });
     await engine.start();
     const reply = await engine.handleEmployeeInput(
       'Ik heb op een link geklikt en daarna mijn wachtwoord ingevuld.',
     );
-    expect(reply.some((m) => m.text.includes('geen instructies'))).toBe(true);
-    expect(incidents.submittedDrafts).toHaveLength(0);
-    expect(audit.recordedEvents.some((event) => event.action === 'submit_incident')).toBe(false);
+    // Phishing NEVER consults the knowledge port (port-call assertion).
+    expect(knowledge.queries).toHaveLength(0);
+    expect(text(reply)).toContain('onveilige situatie');
+    expect(tickets.submittedDrafts).toHaveLength(0);
+    expect(audit.recordedEvents.some((event) => event.action === 'submit_ticket')).toBe(false);
   });
 
   it('never logs raw employee input or sensitive values (safe logging)', async () => {

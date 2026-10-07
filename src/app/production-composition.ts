@@ -1,12 +1,12 @@
 import type { IdentityPort } from '../ports/identity';
-import type { IncidentPort } from '../ports/incident';
 import type { KnowledgePort } from '../ports/knowledge';
+import type { TicketPort } from '../ports/ticket';
 import type { AuditEvent, AuditLoggerPort } from '../ports/logging';
 import { ConversationEngine } from '../services/conversation-engine';
 import { consoleOperationalLogger } from '../mocks/console-operational-logger';
 import { unconfiguredIdentity } from '../ports/identity';
-import { unconfiguredIncident } from '../ports/incident';
 import { unconfiguredKnowledge } from '../ports/knowledge';
+import { unconfiguredTicket } from '../ports/ticket';
 
 /**
  * Thrown by the audit sink when no production audit destination is wired.
@@ -40,8 +40,8 @@ export function unconfiguredAuditDestination(): AuditLoggerPort {
 }
 
 /**
- * Production composition for Build 01: every external port is fail-closed.
- * Identity rejects access, knowledge/incident reject operations, and the
+ * Production composition: every external port is fail-closed. Identity
+ * rejects access, knowledge and ticket ports reject operations, and the
  * audit destination is explicitly unconfigured (release blocker). The chat
  * shell will show a clear "not configured" error state instead of silently
  * falling back to mock or privileged behavior.
@@ -49,11 +49,11 @@ export function unconfiguredAuditDestination(): AuditLoggerPort {
 export function createProductionEngine(): ConversationEngine {
   const identity: IdentityPort = unconfiguredIdentity();
   const knowledge: KnowledgePort = unconfiguredKnowledge();
-  const incidents: IncidentPort = unconfiguredIncident();
+  const ticket: TicketPort = unconfiguredTicket();
   return new ConversationEngine({
     identity,
     knowledge,
-    incidents,
+    ticket,
     operational: consoleOperationalLogger(),
     audit: unconfiguredAuditDestination(),
   });

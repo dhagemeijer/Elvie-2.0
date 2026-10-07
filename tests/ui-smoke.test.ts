@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createChatShell } from '../src/ui/chat-shell';
 import { ConversationEngine } from '../src/services/conversation-engine';
 import { MockIdentityProvider } from '../src/mocks/mock-identity';
-import { MockIncidentProvider } from '../src/mocks/mock-incident';
+import { MockTicketProvider } from '../src/mocks/mock-ticket';
 import { MockKnowledgeProvider } from '../src/mocks/mock-knowledge';
 import { InMemoryAuditLogger } from '../src/mocks/in-memory-audit-logger';
 import { consoleOperationalLogger } from '../src/mocks/console-operational-logger';
@@ -14,7 +14,7 @@ function createTestEngine(): ConversationEngine {
   return new ConversationEngine({
     identity: new MockIdentityProvider(),
     knowledge: new MockKnowledgeProvider(),
-    incidents: new MockIncidentProvider(),
+    ticket: new MockTicketProvider(),
     operational: consoleOperationalLogger(),
     audit: new InMemoryAuditLogger(),
   });
@@ -56,7 +56,9 @@ describe('chat shell (UI smoke)', () => {
 
     const log = root.querySelector('.elvie-log');
     expect(log?.textContent).toContain('wachtwoord vergeten');
-    expect(log?.textContent).toContain('Wachtwoord vergeten');
+    // Build 03 offers a simulated knowledge article (never a real TOPdesk registration).
+    expect(log?.textContent).toContain('Wachtwoord');
+    expect(log?.textContent).toContain('simulatie');
     expect(input?.disabled).toBe(false);
     expect(input?.value).toBe('');
 
@@ -72,7 +74,7 @@ describe('chat shell (UI smoke)', () => {
     const engine = new ConversationEngine({
       identity: unconfiguredIdentity(),
       knowledge: new MockKnowledgeProvider(),
-      incidents: new MockIncidentProvider(),
+      ticket: new MockTicketProvider(),
       operational: consoleOperationalLogger(),
       audit: new InMemoryAuditLogger(),
     });
