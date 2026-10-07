@@ -202,7 +202,7 @@ describe('engine submission protocol (BUILD_03.md v5.2/v5.2.1 par. 11-12)', () =
     expect(preview).toContain('niets naar TOPdesk verzonden');
     const submitted = text(await engine.handleEmployeeInput('versturen'));
     expect(submitted).toMatch(/SIM-incident-\d{4}/);
-    expect(submitted).toContain('geen echte TOPdesk');
+    expect(submitted).toContain('géén echte TOPdesk-melding');
     expect(engine.currentState).toBe('CONFIRM');
     const event = audit.recordedEvents.find((record) => record.action === 'submit_ticket');
     expect(event?.eventType).toBe('ticket_submission');
@@ -272,7 +272,7 @@ describe('engine submission protocol (BUILD_03.md v5.2/v5.2.1 par. 11-12)', () =
     tickets.resolveAsSubmitted('SIM-incident-0421');
     const recovered = text(await engine.handleEmployeeInput('versturen'));
     expect(recovered).toContain('SIM-incident-0421');
-    expect(recovered).toContain('geen echte TOPdesk');
+    expect(recovered).toContain('géén echte TOPdesk-melding');
     expect(engine.currentState).toBe('CONFIRM');
     // Proof that recovery causes no second submit.
     expect(tickets.submitCallCount).toBe(1);
@@ -367,6 +367,6 @@ describe('engine submission protocol (BUILD_03.md v5.2/v5.2.1 par. 11-12)', () =
     expect(preview).toContain('niets naar TOPdesk verzonden');
     const submitted = text(await engine.handleEmployeeInput('versturen'));
     expect(submitted).toContain('simulatie');
-    expect(submitted).toContain('geen echte TOPdesk');
+    expect(submitted).toContain('géén echte TOPdesk-melding');
   });
 });

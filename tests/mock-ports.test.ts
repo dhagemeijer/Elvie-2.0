@@ -48,15 +48,17 @@ describe('mock knowledge provider', () => {
     expect(ids).toContain('mock-kb-008');
     expect(ids).toContain('mock-kb-009');
     expect(ids).toContain('mock-kb-012');
-    expect(ids).toContain('mock-kb-014');
     const byId = new Map(response.results.map((article) => [article.id, article]));
     expect(byId.get('mock-kb-008')?.validUntil).toBe('2025-01-01T00:00:00.000Z');
     expect(byId.get('mock-kb-012')?.validFrom).toBe('2100-01-01T00:00:00.000Z');
     // Adapter-computed quality: no steps means below the threshold.
     expect(byId.get('mock-kb-009')?.minimumQualityMet).toBe(false);
     expect(byId.get('mock-kb-002')?.minimumQualityMet).toBe(true);
-    // The defense-in-depth audience mismatch is granted server-side.
-    expect(byId.get('mock-kb-014')?.audiencePolicy.allowedAudiences).toEqual(['servicedesk']);
+    // The defense-in-depth audience mismatch (a printer article) is granted
+    // server-side and stays in the response without prefiltering (par. 3.4).
+    const printerResponse = await provider.search({ intent: 'incident', subject: 'printer', keywords: ['printer'] });
+    const printerArticle = printerResponse.results.find((article) => article.id === 'mock-kb-014');
+    expect(printerArticle?.audiencePolicy.allowedAudiences).toEqual(['servicedesk']);
   });
 
   it('returns no_results when no controlled signal is provided', async () => {    const provider = new MockKnowledgeProvider();

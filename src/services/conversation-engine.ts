@@ -46,6 +46,7 @@ export interface EngineTexts {
   readonly noKnowledgeFound: string;
   readonly knowledgeExhausted: string;
   readonly knowledgeDependencyError: string;
+  readonly knowledgeDependencyIntake: string;
   readonly resolvedDone: string;
   readonly threeWayQuestion: string;
   readonly previewIntro: string;
@@ -67,6 +68,8 @@ export const DEFAULT_ENGINE_TEXTS: EngineTexts = {
     'Ik heb geen verdere oplossingen om aan te bieden. We kunnen je situatie vastleggen in deze simulatie.',
   knowledgeDependencyError:
     "De kennisvoorziening is op dit moment niet beschikbaar, waardoor ik geen oplossingen kan opzoeken. Typ 'opnieuw' om het nogmaals te proberen, of 'melding' om je situatie direct vast te leggen.",
+  knowledgeDependencyIntake:
+    'De kennisvoorziening blijft voor nu onbeschikbaar. We kunnen je situatie vastleggen in deze simulatie.',
   resolvedDone: 'Fijn dat dit je verder hielp. Fijne dag!',
   // par. 7: fixed three-way question.
   threeWayQuestion: "Lost dit je probleem op? Antwoord 'opgelost', 'niet opgelost' of 'onduidelijk'.",
@@ -391,7 +394,7 @@ export class ConversationEngine {
           return this.runKnowledgeSearch();
         }
         if (answer.includes('melding')) {
-          return this.goToIntake(this.texts.noKnowledgeFound);
+          return this.goToIntake(this.texts.knowledgeDependencyIntake);
         }
         // Any other input after a search failure is never feedback.
         return [{ role: 'elvie', text: this.texts.knowledgeDependencyError }];
