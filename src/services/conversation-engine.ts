@@ -550,7 +550,7 @@ export class ConversationEngine {
     const submission = context.submission;
 
     if (submission.status === 'inconclusive') {
-      if (answer.includes('verstuur') || answer.includes('verzend') || answer.includes('status') || answer === 'ja') {
+      if (answer.includes('verstuur') || answer.includes('versturen') || answer.includes('verzend') || answer.includes('status') || answer === 'ja') {
         return this.checkSubmissionStatus();
       }
       return [
