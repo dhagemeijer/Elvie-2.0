@@ -68,7 +68,7 @@ describe('mock knowledge provider', () => {
 
     const queries = provider.capturedSearchQueries;
     expect(queries).toHaveLength(1);
-    expect(queries[0].subject).toBe('Account');
+    expect(queries[0]?.subject).toBe('Account');
   });
 
   it('throws in unavailable mode to simulate a dependency failure', async () => {
@@ -92,7 +92,7 @@ describe('mock ticket provider', () => {
       expect(result.submissionKey).toBe(key.value);
     }
     expect(provider.submittedDrafts).toHaveLength(1);
-    expect(provider.submittedDrafts[0].category).toBe('incident');
+    expect(provider.submittedDrafts[0]?.category).toBe('incident');
   });
 
   it('is idempotent per submission key', async () => {

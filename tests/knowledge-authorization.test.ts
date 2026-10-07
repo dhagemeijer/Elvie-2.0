@@ -65,8 +65,13 @@ describe('knowledge authorization (BUILD_03.md par. 4)', () => {
     const response = await provider.search(accountQuery);
     expect(response.results).toEqual([]);
     const decisions = provider.lastAuthorizationDecisions;
-    expect(decisions[0]?.status).toBe('inconclusive');
-    expect(decisions[0]?.reasonCategory).toBe('untrustworthy_authorization_metadata');
+    const first = decisions[0];
+    expect(first?.status).toBe('inconclusive');
+    expect(
+      first !== undefined && first.status === 'inconclusive'
+        ? first.reasonCategory
+        : undefined,
+    ).toBe('untrustworthy_authorization_metadata');
   });
 
   it('logs authorization outcomes internally with safe categories only', async () => {

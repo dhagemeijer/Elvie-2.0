@@ -35,7 +35,7 @@ export class MockTicketProvider implements TicketPort {
   private readonly submissions = new Map<string, TicketSubmissionResult>();
   private readonly statuses = new Map<string, TicketStatusResult>();
   private readonly drafts: TicketDraft[] = [];
-  private submitCallCount = 0;
+  private submitAttempts = 0;
   private lastSubmissionKey: SubmissionKey | undefined;
 
   constructor(options: MockTicketProviderOptions = {}) {
@@ -49,7 +49,7 @@ export class MockTicketProvider implements TicketPort {
   }
 
   async submit(draft: TicketDraft, submissionKey: SubmissionKey): Promise<TicketSubmissionResult> {
-    this.submitCallCount += 1;
+    this.submitAttempts += 1;
     this.lastSubmissionKey = submissionKey;
     const existing = this.submissions.get(submissionKey.value);
     if (existing !== undefined) {
@@ -100,7 +100,7 @@ export class MockTicketProvider implements TicketPort {
 
   /** Number of actual submit calls (idempotency assertions). */
   get submitCallCount(): number {
-    return this.submitCallCount;
+    return this.submitAttempts;
   }
 
   private buildResult(draft: TicketDraft, submissionKey: SubmissionKey): TicketSubmissionResult {
