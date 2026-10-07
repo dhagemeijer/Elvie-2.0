@@ -11,6 +11,7 @@ on:
     branches:
       - build-01-application-foundation
       - build-02-conversation-core
+      - build-03-knowledge-resolution
   pull_request:
 
 permissions:
