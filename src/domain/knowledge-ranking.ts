@@ -15,8 +15,13 @@
  * - rank_resource_match:  article requestedResource equals the query value;
  * - rank_keyword_match:   at least one controlled keyword overlaps.
  *
- * Relevance threshold: an article must match at least MIN_RELEVANT_MATCHES
- * rule(s). Ordering is a fixed, ordered tuple (subject, symptom, resource,
+ * Relevance threshold (approved BUILD_03.md v5.2): an article falls below
+ * the threshold only when rank_keyword_match is its sole match rule AND
+ * exactly one controlled keyword overlaps. Any subject, symptom or resource
+ * match is relevant on its own, as is a keyword-only match with two or more
+ * overlapping keywords.
+ *
+ * Ordering is a fixed, ordered tuple (subject, symptom, resource,
  * keyword), best first; equal tuples are ordered by article id ascending.
  * Everything is deterministic: identical input produces identical output.
  */
@@ -24,8 +29,12 @@ import type { KnowledgeArticle, KnowledgeSearchQuery } from '../ports/knowledge'
 
 export type RankingRuleId = 'rank_subject_exact' | 'rank_symptom_match' | 'rank_resource_match' | 'rank_keyword_match';
 
-/** Minimum number of matched rules for an article to be relevant. */
-export const MIN_RELEVANT_MATCHES = 1;
+/**
+ * Minimum number of overlapping controlled keywords for a keyword-only
+ * match to be relevant (approved BUILD_03.md v5.2: a single keyword overlap
+ * without any further match rule falls below the threshold).
+ */
+export const MIN_RELEVANT_KEYWORD_OVERLAPS = 2;
 
 export interface RankedKnowledgeArticle {
   readonly article: KnowledgeArticle;
@@ -64,6 +73,27 @@ function matchRulesFor(article: KnowledgeArticle, query: KnowledgeSearchQuery): 
   return rules;
 }
 
+function keywordOverlapCount(article: KnowledgeArticle, query: KnowledgeSearchQuery): number {
+  return query.keywords.filter((keyword) => article.keywords.includes(keyword)).length;
+}
+
+/**
+ * Approved relevance threshold (BUILD_03.md v5.2): only rank_keyword_match
+ * with exactly one overlapping keyword and no further match rule falls
+ * below the threshold.
+ */
+function meetsRelevanceThreshold(
+  article: KnowledgeArticle,
+  query: KnowledgeSearchQuery,
+  matchRules: readonly RankingRuleId[],
+): boolean {
+  const hasNonKeywordRule = matchRules.some((rule) => rule !== 'rank_keyword_match');
+  if (hasNonKeywordRule) {
+    return true;
+  }
+  return keywordOverlapCount(article, query) >= MIN_RELEVANT_KEYWORD_OVERLAPS;
+}
+
 /** Fixed relevance tuple: subject, symptom, resource, keyword. */
 function relevanceKey(rules: readonly RankingRuleId[]): readonly [number, number, number, number] {
   return [
@@ -99,7 +129,7 @@ export function rankKnowledgeArticles(
   const ranked: RankedKnowledgeArticle[] = [];
   for (const article of gatedArticles) {
     const matchRules = matchRulesFor(article, query);
-    if (matchRules.length >= MIN_RELEVANT_MATCHES) {
+    if (meetsRelevanceThreshold(article, query, matchRules)) {
       ranked.push({ article, matchRules });
     }
   }
