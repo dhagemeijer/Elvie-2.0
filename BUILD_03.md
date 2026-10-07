@@ -1,7 +1,7 @@
 # Elvie 2.0 — Build 03: Knowledge & Resolution
 
-Status: **geconsolideerde definitieve specificatie (v5.2, awaiting explicit
-approval — nog geen applicatiecode)**
+Status: **geconsolideerde definitieve specificatie (v5.2.1; v5.2 en de
+v5.2.1-patch voor §10.1/§11/§12/§14 zijn expliciet goedgekeurd)**
 
 ## 0. Leidend uitgangspunt
 
@@ -380,13 +380,38 @@ export type TicketSubmissionResult =
       // GEEN referentieveld
     };
 
+/**
+ * Discriminated statusresultaat (v5.2.1): exact één uitkomst per
+ * statuscontrole op dezelfde SubmissionKey.
+ * - submitted: aantoonbaar geslaagde simulatieregistratie; NIET-LEGE,
+ *   geldige referentie verplicht; de submissionKey echoot EXACT de
+ *   sleutel van de logische inzending.
+ * - unknown:    onzekere uitkomst; GEEN referentieveld.
+ * Ongeldige of tegenstrijdige statusrespons (verkeerde variant, lege
+ * referentie bij submitted, afwijkende submissionKey, referentieveld
+ * bij unknown) is een contractschending en wordt door Elvie
+ * fail-closed als onzeker (inconclusive) behandeld: NOOIT CONFIRM.
+ */
+export type TicketStatusResult =
+  | {
+      readonly kind: 'submitted';
+      readonly submissionKey: SubmissionKey; // exact gelijk aan de inzendings-sleutel
+      readonly reference: string;            // niet-leeg, verplicht
+    }
+  | {
+      readonly kind: 'unknown';
+      readonly submissionKey: SubmissionKey; // exact gelijk aan de inzendings-sleutel
+      // GEEN referentieveld
+    };
+
 export interface TicketPort {
   /** Idempotent per submissionKey: zelfde sleutel → zelfde resultaat,
       nooit een tweede registratie. */
   submit(draft: TicketDraft): Promise<TicketSubmissionResult>;
   /** Statuscontrole uitsluitend op de sleutel; werkt ook wanneer nooit
-      een referentie is ontvangen. */
-  getStatus(submissionKey: SubmissionKey): Promise<'submitted' | 'unknown'>;
+      een referentie is ontvangen. Retourneert een discriminated
+      TicketStatusResult (v5.2.1). */
+  getStatus(submissionKey: SubmissionKey): Promise<TicketStatusResult>;
 }
 ```
 
@@ -395,10 +420,20 @@ Contractregels (verplicht, getest):
 - **submitted vereist** een niet-lege referentie én een submissionKey die
   exact overeenkomt met het draft; anders is de respons ongeldig.
 - **failed/unknown bevatten nooit een referentie.**
+- **submitted-status vereist** (v5.2.1) een niet-lege referentie én een
+  submissionKey die exact overeenkomt met de sleutel van de logische
+  inzending; anders is de statusrespons ongeldig.
+- **unknown-status bevat nooit een referentie.**
 - Elvies engine valideert elke respons: een `submitted`-variant met lege
   referentie, een `failed`/`unknown`-variant mét referentie, of een
   afwijkende submissionKey wordt als **ongeldig/tegenstrijdig** behandeld
   → verwerkt als `unknown` (onzeker) → **nooit CONFIRM**; veilig gelogd
+  (`submission_contract_violation`-categorie, zonder inhoud).
+- Elvies engine valideert elke statusrespons (v5.2.1): een
+  `submitted`-status met lege referentie, een `unknown`-status mét
+  referentieveld, of een afwijkende submissionKey wordt als
+  **ongeldig/tegenstrijdig** behandeld → fail-closed verwerkt als
+  `inconclusive` → **nooit CONFIRM**; veilig gelogd
   (`submission_contract_violation`-categorie, zonder inhoud).
 - `submit` is idempotent per submissionKey (zelfde resultaat, geen tweede
   registratie).
@@ -432,10 +467,16 @@ Regels (verplicht, getest):
 
 - Bij `inconclusive` leidt nieuwe invoer — ook 'versturen' — **nooit**
   automatisch tot een nieuwe submit-aanroep. Elvie start uitsluitend een
-  statuscontrole `getStatus(sleutel)`:
-  - `'submitted'` → succesroute (PREVIEW → SUBMIT → CONFIRM);
-  - `'unknown'` → blijft `inconclusive` + PREVIEW; vaste dubbel-/
-    simulatie-tekst met servicebalie-verwijzing.
+  statuscontrole `getStatus(sleutel)` met dezelfde SubmissionKey:
+  - geldige `kind: 'submitted'`-status (niet-lege referentie, exact
+    overeenkomende submissionKey) → succesroute (PREVIEW → SUBMIT →
+    CONFIRM) met de bestaande fictieve referentie;
+  - geldige `kind: 'unknown'`-status → blijft `inconclusive` + PREVIEW;
+    vaste dubbel-/simulatie-tekst met servicebalie-verwijzing;
+  - ongeldige of tegenstrijdige statusrespons → fail-closed
+    `inconclusive` (nooit CONFIRM); veilig gelogd;
+  - exception bij de statuscontrole → blijft `inconclusive`; herhaalde
+    'versturen'-invoer herhaalt alléén de statuscontrole.
 - Herstel verloopt uitsluitend via statuscontrole en aantoonbare
   idempotentie; nooit via ongemerkt herverzenden.
 - Bij `failed` is een nieuwe poging alleen mogelijk na expliciete nieuwe
@@ -468,6 +509,9 @@ expliciete simulatie-vermelding (§9.2).
 | **exception bij submit: timeout, netwerkonderbreking, onbekende transportfout** | `inconclusive` | zelfde tekst als `unknown` | geen; blijft PREVIEW |
 | exception met aantoonbaar definitieve fout (alléén wanneer de poort expliciet een definitieve fout signaleert) | `failed` | zelfde tekst als `failed` | geen; blijft PREVIEW |
 | ongeldige/tegenstrijdige respons (§10.1) | `inconclusive` | zelfde tekst als `unknown` | geen; blijft PREVIEW |
+| geldige statusrespons `kind: 'submitted'` (herstel na timeout, §11) | `submitted` | simulatie-succes (§9.2) | PREVIEW → SUBMIT → CONFIRM |
+| geldige statusrespons `kind: 'unknown'` | `inconclusive` | zelfde tekst als `unknown` | geen; blijft PREVIEW |
+| ongeldige/tegenstrijdige statusrespons (§10.1, v5.2.1) | `inconclusive` | zelfde tekst als `unknown` | geen; blijft PREVIEW |
 
 - **Uitsluitend aantoonbaar definitieve fouten → `failed`.** Alle
   timeouts, netwerkonderbrekingen en onbekende transportfouten →
@@ -482,6 +526,13 @@ expliciete simulatie-vermelding (§9.2).
 - **Dubbele tickets onmogelijk:** idempotente poort per sleutel, geen
   automatische retry, elke submit vereist expliciete bevestiging,
   statuscontrole vóór verdere stappen.
+- **Statusresponscontract (v5.2.1):** elke `getStatus`-respons is een
+  gevalideerde discriminated union; herstel na een timeout verloopt
+  uitsluitend via een geldige `kind: 'submitted'`-status met dezelfde
+  SubmissionKey en de bestaande fictieve referentie (PREVIEW → SUBMIT →
+  CONFIRM). Ongeldige of tegenstrijdige statusresponsen zijn fail-closed
+  `inconclusive` en leiden nooit tot CONFIRM of een nieuwe
+  submit-aanroep.
 - SUBMIT wordt uitsluitend als doorgangsstap PREVIEW→CONFIRM gebruikt; de
   engine verkeert nooit rustend in SUBMIT.
 
@@ -564,6 +615,11 @@ audit-invarianten ongewijzigd.
   (call-count-assertie);
 - `getStatus` werkt met alléén de sleutel wanneer géén referentie is
   ontvangen (timeout-pad);
+- **`getStatus` is discriminated (v5.2.1), positief en negatief:** geldige
+  `kind: 'submitted'`-status met niet-lege referentie en exact
+  overeenkomende submissionKey; **negatief:** lege/afwezige referentie,
+  afwijkende submissionKey, `unknown` mét ongeoorloofd reference-veld →
+  ongeldig → fail-closed `inconclusive`, nooit CONFIRM, veilig gelogd;
 - sleutel is inhoudsloos (geen inhoud in sleutel/log/payload).
 
 **SubmissionStatus & exception-afhandeling (negatief, faalt zonder v5.2):**
@@ -577,6 +633,11 @@ audit-invarianten ongewijzigd.
   herhaalde 'versturen'-beurten veroorzaken nooit een tweede submit;
 - `getStatus → 'submitted'` → CONFIRM met bestaande fictieve referentie;
   `getStatus → 'unknown'` → blijft PREVIEW + onzekerheidstekst;
+- **timeout-herstel (v5.2.1):** herstel via geldige `kind: 'submitted'`-
+  status met dezelfde SubmissionKey en de bestaande fictieve referentie →
+  CONFIRM zonder tweede submit (poort-call-assertie); herhaalde
+  'versturen'-beurten veroorzaken nooit een tweede submit; ongeldige
+  statusrespons → blijft PREVIEW + veilige log;
 - `failed` → nieuwe poging alléén na expliciete bevestiging in nieuwe
   beurt (nieuwe sleutel);
 - lifecycle-invariant: `currentState === PREVIEW` bij elke status ≠
