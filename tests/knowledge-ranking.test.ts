@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { KnowledgeArticle } from '../src/ports/knowledge';
-import { gateKnowledgeArticles, rankKnowledgeArticles } from '../src/domain/knowledge-ranking';
+import {
+  gateKnowledgeArticles,
+  rankKnowledgeArticles,
+  type RankingExplanation,
+} from '../src/domain/knowledge-ranking';
 
 const NOW = '2026-01-15T12:00:00.000Z';
 
@@ -10,20 +14,22 @@ function makeArticle(id: string, overrides: Partial<KnowledgeArticle> = {}): Kno
     title: 'Artikel ' + id,
     summary: 'Fictieve samenvatting.',
     steps: ['Stap 1'],
+    sourceReference: 'KB-' + id.toUpperCase(),
     status: 'published',
-    language: 'nl-NL',
+    language: 'nl',
     minimumQualityMet: true,
     validFrom: '2024-01-01T00:00:00.000Z',
     keywords: [],
-    authorization: { policyId: 'policy-employee-kb', allowedAudiences: ['employee'] },
+    authorizationDecision: { decidedBy: 'knowledge-adapter', decision: 'granted', policyId: 'policy-employee-kb' },
+    audiencePolicy: { allowedAudiences: ['employee'] },
     ...overrides,
   };
 }
 
-describe('knowledge gating (BUILD_03.md par. 7)', () => {
+describe('knowledge gating (BUILD_03.md v5.2 par. 5)', () => {
   it('keeps valid published articles', () => {
     const article = makeArticle('kb-ok');
-    expect(gateKnowledgeArticles([article], NOW)).toEqual([article]);
+    expect(gateKnowledgeArticles([article], NOW, 'employee')).toEqual([article]);
   });
 
   it('gates out draft, archived, low-quality, expired, future and non-nl articles', () => {
@@ -33,15 +39,48 @@ describe('knowledge gating (BUILD_03.md par. 7)', () => {
       makeArticle('kb-quality', { minimumQualityMet: false }),
       makeArticle('kb-expired', { validUntil: '2025-12-31T00:00:00.000Z' }),
       makeArticle('kb-future', { validFrom: '2100-01-01T00:00:00.000Z' }),
-      makeArticle('kb-language', { language: 'en-US' } as unknown as Partial<KnowledgeArticle>),
+      makeArticle('kb-language', { language: 'nl-NL' as unknown as 'nl' }),
       makeArticle('kb-valid', {}),
     ];
-    const gated = gateKnowledgeArticles(articles, NOW);
+    const gated = gateKnowledgeArticles(articles, NOW, 'employee');
     expect(gated.map((article) => article.id)).toEqual(['kb-valid']);
+  });
+
+  it('fails closed on denied, inconclusive, absent and contradictory authorization decisions', () => {
+    const articles = [
+      makeArticle('kb-denied', {
+        authorizationDecision: { decidedBy: 'knowledge-adapter', decision: 'denied', reasonCategory: 'policy_denied' },
+      }),
+      makeArticle('kb-inconclusive', {
+        authorizationDecision: {
+          decidedBy: 'knowledge-adapter',
+          decision: 'inconclusive',
+          reasonCategory: 'policy_unavailable',
+        },
+      }),
+      makeArticle('kb-granted-without-policy', {
+        authorizationDecision: { decidedBy: 'knowledge-adapter', decision: 'granted' },
+      }),
+      makeArticle('kb-granted', {}),
+    ];
+    const gated = gateKnowledgeArticles(articles, NOW, 'employee');
+    expect(gated.map((article) => article.id)).toEqual(['kb-granted']);
+  });
+
+  it('applies defense-in-depth independently: granted with a non-fitting audience is gated out', () => {
+    const articles = [
+      makeArticle('kb-audience-mismatch', { audiencePolicy: { allowedAudiences: ['servicedesk'] } }),
+      makeArticle('kb-audience-ok', {}),
+    ];
+    const gated = gateKnowledgeArticles(articles, NOW, 'employee');
+    expect(gated.map((article) => article.id)).toEqual(['kb-audience-ok']);
+    // The defense-in-depth layer is separately testable with another audience.
+    const servicedesk = gateKnowledgeArticles(articles, NOW, 'servicedesk');
+    expect(servicedesk.map((article) => article.id)).toEqual(['kb-audience-mismatch']);
   });
 });
 
-describe('knowledge ranking (BUILD_03.md par. 7)', () => {
+describe('knowledge ranking (BUILD_03.md v5.2 par. 5)', () => {
   const query = {
     intent: 'incident' as const,
     subject: 'laptop',
@@ -50,19 +89,21 @@ describe('knowledge ranking (BUILD_03.md par. 7)', () => {
     keywords: ['laptop'],
   };
 
-  it('assigns the documented ranking rule ids', () => {
+  it('assigns the documented ranking rule ids with matched terms', () => {
     const articles = [
       makeArticle('kb-subj', { subject: 'laptop', symptom: 'no_connection', keywords: ['laptop'] }),
       makeArticle('kb-symptom', { symptom: 'no_connection' }),
       makeArticle('kb-keyword', { keywords: ['laptop'] }),
     ];
     const ranked = rankKnowledgeArticles(articles, query);
-    expect(ranked[0]?.matchRules).toEqual([
-      'rank_subject_exact',
-      'rank_symptom_match',
-      'rank_keyword_match',
+    expect(explanationOf(ranked[0]?.explanation)).toEqual([
+      { ruleId: 'rank_subject_exact', matchedTerms: ['laptop'] },
+      { ruleId: 'rank_symptom_match', matchedTerms: ['no_connection'] },
+      { ruleId: 'rank_keyword_match', matchedTerms: ['laptop'] },
     ]);
-    expect(ranked[1]?.matchRules).toEqual(['rank_symptom_match']);
+    expect(explanationOf(ranked[1]?.explanation)).toEqual([
+      { ruleId: 'rank_symptom_match', matchedTerms: ['no_connection'] },
+    ]);
     // kb-keyword is keyword-only with a single keyword overlap: below the
     // approved relevance threshold and therefore excluded.
     expect(ranked).toHaveLength(2);
@@ -92,7 +133,9 @@ describe('knowledge ranking (BUILD_03.md par. 7)', () => {
     const keywordOnlyDouble = makeArticle('kb-keyword-double', { keywords: ['laptop', 'no_connection'] });
     const ranked = rankKnowledgeArticles([keywordOnlyDouble], doubleKeywordQuery);
     expect(ranked).toHaveLength(1);
-    expect(ranked[0]?.matchRules).toEqual(['rank_keyword_match']);
+    expect(explanationOf(ranked[0]?.explanation)).toEqual([
+      { ruleId: 'rank_keyword_match', matchedTerms: ['laptop', 'no_connection'] },
+    ]);
   });
 
   it('keeps a single subject match without any keyword overlap', () => {
@@ -104,7 +147,10 @@ describe('knowledge ranking (BUILD_03.md par. 7)', () => {
   it('keeps a keyword-only match combined with a further match rule', () => {
     const keywordPlusSubject = makeArticle('kb-keyword-subject', { subject: 'laptop', keywords: ['laptop'] });
     const ranked = rankKnowledgeArticles([keywordPlusSubject], query);
-    expect(ranked[0]?.matchRules).toEqual(['rank_subject_exact', 'rank_keyword_match']);
+    expect(explanationOf(ranked[0]?.explanation)).toEqual([
+      { ruleId: 'rank_subject_exact', matchedTerms: ['laptop'] },
+      { ruleId: 'rank_keyword_match', matchedTerms: ['laptop'] },
+    ]);
   });
 
   it('ranks subject+symptom above keyword matches and excludes single keyword-only matches', () => {
@@ -144,6 +190,13 @@ describe('knowledge ranking (BUILD_03.md par. 7)', () => {
     };
     const resource = makeArticle('kb-resource', { requestedResource: 'Mailbox', keywords: ['Mailbox'] });
     const ranked = rankKnowledgeArticles([resource], requestQuery);
-    expect(ranked[0]?.matchRules).toEqual(['rank_resource_match', 'rank_keyword_match']);
+    expect(explanationOf(ranked[0]?.explanation)).toEqual([
+      { ruleId: 'rank_resource_match', matchedTerms: ['Mailbox'] },
+      { ruleId: 'rank_keyword_match', matchedTerms: ['Mailbox'] },
+    ]);
   });
 });
+
+function explanationOf(explanation: readonly RankingExplanation[] | undefined) {
+  return explanation;
+}

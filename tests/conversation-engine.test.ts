@@ -51,22 +51,24 @@ describe('ConversationEngine', () => {
     await engine.start();
     const search = await engine.handleEmployeeInput('printer print niet');
     expect(text(search)).toContain('Printer');
-    // Exhaust the resolution series deterministically: the knowledge store
-    // may offer additional symptom-matched articles before the intake.
+    // The resolution series is exhausted deterministically; the knowledge
+    // store may offer symptom-matched articles before the intake.
     let intake = await engine.handleEmployeeInput('niet opgelost');
     let guard = 0;
-    while (!text(intake).includes('versturen') && guard < 4) {
+    while (!text(intake).includes('Bevestig om de simulatie af te ronden') && guard < 4) {
       intake = await engine.handleEmployeeInput('niet opgelost');
       guard += 1;
     }
     // The exhausted series routes to the generic intake and, because
     // everything is already known, straight to the preview.
-    expect(text(intake)).toContain('versturen');
+    expect(text(intake)).toContain('Bevestig om de simulatie af te ronden');
+    expect(text(intake)).toContain('niets naar TOPdesk verzonden');
     const confirmed = await engine.handleEmployeeInput('versturen');
     expect(text(confirmed)).toMatch(/SIM-incident-\d{4}/);
     expect(text(confirmed)).toContain('simulatie');
     expect(tickets.submittedDrafts).toHaveLength(1);
     const submissionEvent = audit.recordedEvents.find((event) => event.action === 'submit_ticket');
+    expect(submissionEvent?.eventType).toBe('ticket_submission');
     expect(submissionEvent?.outcome).toBe('success');
     expect(submissionEvent?.targetId).toMatch(/^SIM-incident-\d{4}$/);
   });
@@ -94,8 +96,7 @@ describe('ConversationEngine', () => {
     const messages = await engine.start();
     expect(messages[0]?.role).toBe('error');
     expect(messages[0]?.text).not.toContain('Test Medewerker');
-    
-const authEvent = audit.recordedEvents.find((event) => event.action === 'establish_session');
+    const authEvent = audit.recordedEvents.find((event) => event.action === 'establish_session');
     expect(authEvent?.outcome).toBe('failed');
     // A failed normal employee session must NOT be recorded as an
     // administrative event type; administrative event types are reserved

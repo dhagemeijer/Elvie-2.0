@@ -97,7 +97,10 @@ describe('ConversationEngine Build 02 integration', () => {
     );
     // Phishing NEVER consults the knowledge port (port-call assertion).
     expect(knowledge.queries).toHaveLength(0);
-    expect(text(reply)).toContain('onveilige situatie');
+    // Approved phishing instruction (par. 9.1): no registration or sending
+    // claim, explicit simulation.
+    expect(text(reply)).toContain('niet registreren of versturen');
+    expect(text(reply)).toContain('simulatie');
     expect(tickets.submittedDrafts).toHaveLength(0);
     expect(audit.recordedEvents.some((event) => event.action === 'submit_ticket')).toBe(false);
   });

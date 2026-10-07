@@ -48,14 +48,16 @@ function laptopArticle(id: string): KnowledgeArticle {
     title: 'Oplossing ' + id,
     summary: 'Fictieve instructie voor laptop-problemen.',
     steps: ['Stap 1', 'Stap 2'],
+    sourceReference: 'KB-' + id.toUpperCase(),
     status: 'published',
-    language: 'nl-NL',
+    language: 'nl',
     minimumQualityMet: true,
     validFrom: '2024-01-01T00:00:00.000Z',
     keywords: ['laptop'],
     subject: 'laptop',
     symptom: 'no_connection',
-    authorization: { policyId: 'policy-employee-kb', allowedAudiences: ['employee'] },
+    authorizationDecision: { decidedBy: 'knowledge-adapter', decision: 'granted', policyId: 'policy-employee-kb' },
+    audiencePolicy: { allowedAudiences: ['employee'] },
   };
 }
 
@@ -88,8 +90,8 @@ async function startLaptopScenario(engine: ConversationEngine): Promise<string> 
   return text(reply);
 }
 
-describe('guided resolution flow (BUILD_03.md par. 9-10)', () => {
-  it('offers a ranked article and resolves to DONE after explicit confirmation', async () => {
+describe('guided resolution flow (BUILD_03.md v5.2 par. 7)', () => {
+  it('offers a ranked article with the fixed presentation format and resolves to DONE after explicit confirmation', async () => {
     const knowledge = new RecordingKnowledgeProvider({
       results: [laptopArticle('kb-vpn')],
       outcome: 'ok',
@@ -97,7 +99,11 @@ describe('guided resolution flow (BUILD_03.md par. 9-10)', () => {
     const { engine } = createEngine(knowledge);
     const first = await startLaptopScenario(engine);
     expect(first).toContain('Oplossing kb-vpn');
-    expect(first).toContain('opgelost');
+    // Fixed presentation format (par. 6): title, steps, source citation.
+    expect(first).toContain('Stappen:');
+    expect(first).toContain('Bron: TOPdesk Kennisbank — KB-KB-VPN');
+    // Fixed three-way question (par. 7).
+    expect(first).toContain("Lost dit je probleem op? Antwoord 'opgelost', 'niet opgelost' of 'onduidelijk'.");
     const resolved = await engine.handleEmployeeInput('opgelost');
     expect(text(resolved)).toContain('Fijn');
     expect(engine.currentState).toBe('DONE');
@@ -117,7 +123,7 @@ describe('guided resolution flow (BUILD_03.md par. 9-10)', () => {
     const intake = text(await engine.handleEmployeeInput('helpt niet'));
     expect(intake).not.toContain('Oplossing kb-4');
     expect(intake).toContain('vastleggen');
-    expect(intake).toContain('versturen');
+    expect(intake).toContain('simulatie');
   });
 
   it('treats "onduidelijk" as clarification, never as automatic rejection', async () => {
@@ -149,8 +155,8 @@ describe('guided resolution flow (BUILD_03.md par. 9-10)', () => {
     const knowledge = new RecordingKnowledgeProvider();
     const { engine } = createEngine(knowledge);
     const reply = await startLaptopScenario(engine);
-    expect(reply).toContain('geen passende oplossing');
-    expect(reply).toContain('versturen');
+    expect(reply).toContain('Ik heb hiervoor geen passende instructies gevonden.');
+    expect(reply).toContain('Bevestig om de simulatie af te ronden');
     // Never knowingly ask twice: symptom and device are already known.
     expect(reply).not.toContain('Wat gebeurt er precies?');
     expect(reply).not.toContain('Op welk apparaat');
@@ -184,7 +190,7 @@ describe('guided resolution flow (BUILD_03.md par. 9-10)', () => {
   });
 });
 
-describe('intent-specific routes (BUILD_03.md par. 11)', () => {
+describe('intent-specific routes (BUILD_03.md v5.2 par. 9)', () => {
   it('never consults the knowledge port for a phishing report (security intake)', async () => {
     const knowledge = new RecordingKnowledgeProvider();
     const { engine, tickets } = createEngine(knowledge);
@@ -193,7 +199,10 @@ describe('intent-specific routes (BUILD_03.md par. 11)', () => {
       await engine.handleEmployeeInput('Ik heb op een link geklikt en daarna mijn wachtwoord ingevuld.'),
     );
     expect(knowledge.queries).toHaveLength(0);
-    expect(reply).toContain('onveilige situatie');
+    // Approved phishing instruction (par. 9.1): no registration or sending
+    // claim, explicit simulation.
+    expect(reply).toContain('niet registreren of versturen');
+    expect(reply).toContain('simulatie');
     expect(reply).toContain('beveiligingsmelding');
     expect(reply).not.toContain('kennis');
     expect(tickets.submittedDrafts).toHaveLength(0);
@@ -201,6 +210,7 @@ describe('intent-specific routes (BUILD_03.md par. 11)', () => {
     const preview = text(await engine.handleEmployeeInput('klaar'));
     expect(preview).toContain('beveiligingsmelding');
     expect(preview).toContain('simulatie');
+    expect(preview).toContain('niets naar TOPdesk verzonden');
     const submitted = text(await engine.handleEmployeeInput('versturen'));
     expect(submitted).toMatch(/SIM-security-\d{4}/);
     expect(tickets.submittedDrafts[0]?.category).toBe('security');
@@ -242,7 +252,7 @@ describe('intent-specific routes (BUILD_03.md par. 11)', () => {
     // straight to the preview without re-asking anything.
     expect(reply).not.toContain('Wat gebeurt er precies?');
     expect(reply).not.toContain('Op welk apparaat');
-    expect(reply).toContain('versturen');
+    expect(reply).toContain('Bevestig om de simulatie af te ronden');
     expect(engine.currentState).toBe('PREVIEW');
   });
 

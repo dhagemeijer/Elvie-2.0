@@ -31,7 +31,7 @@ export interface OperationalLoggerPort {
 // Audit logging
 // ---------------------------------------------------------------------------
 
-export type AuditOutcome = 'success' | 'denied' | 'failed';
+export type AuditOutcome = 'success' | 'denied' | 'failed' | 'inconclusive';
 
 /**
  * Structured audit event per AUDIT_LOGGING.md target fields.

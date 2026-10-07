@@ -8,17 +8,20 @@ import type {
 
 /**
  * Development/test knowledge adapter with fictional data only
- * (BUILD_03.md). This mock models the future TOPdesk Knowledge adapter
- * boundary and its server-side obligations:
+ * (BUILD_03.md v5.2 par. 3.4). This mock models the future TOPdesk
+ * Knowledge adapter boundary and its server-side obligations:
  *
- * - authorization is decided HERE, per article, before anything is
- *   returned (granted requires the article policyId; denied/inconclusive
- *   require a safe reason category);
- * - untrustworthy authorization metadata (missing/empty policyId or a
- *   non-array audience list) is fail-closed: the article is invisible and
- *   logged internally as inconclusive;
+ * - the catalogue fixtures carry the structured server-side
+ *   authorization decisions (granted/denied/inconclusive, including the
+ *   deliberately contradictory granted-without-policyId item);
+ * - the mock returns FULL metadata without filtering up front, so
+ *   Elvie's own fail-closed gating (par. 3.2/5) stays independently
+ *   testable;
+ * - the quality threshold is adapter-computed here (mock: title present,
+ *   source reference present, at least one step);
  * - a denied article is indistinguishable from a non-existent one in the
- *   response: results and outcome are identical to the no-results case;
+ *   employee-facing reply: that distinction is only operational, never
+ *   visible to the employee;
  * - there is no unbounded search: a query without any controlled signal
  *   returns no results;
  * - article content never appears in any log.
@@ -27,22 +30,30 @@ export type MockKnowledgeDependencyMode = 'ok' | 'unavailable';
 
 export interface MockKnowledgeProviderOptions {
   readonly articles?: readonly KnowledgeArticle[];
-  /** Audience of the (fictional) authenticated employee. */
-  readonly audience?: string;
   /** Simulate a broken knowledge dependency. */
   readonly mode?: MockKnowledgeDependencyMode;
 }
 
+/** Adapter-computed quality verdict (BUILD_03.md v5.2 par. 5). */
+function computeQuality(article: KnowledgeArticle): boolean {
+  return (
+    typeof article.title === 'string' &&
+    article.title.trim().length > 0 &&
+    typeof article.sourceReference === 'string' &&
+    article.sourceReference.trim().length > 0 &&
+    Array.isArray(article.steps) &&
+    article.steps.length >= 1
+  );
+}
+
 export class MockKnowledgeProvider implements KnowledgePort {
   private readonly articles: readonly KnowledgeArticle[];
-  private readonly audience: string;
   private readonly mode: MockKnowledgeDependencyMode;
   private readonly decisions: KnowledgeAuthorizationDecision[] = [];
   private readonly capturedQueries: KnowledgeSearchQuery[] = [];
 
   constructor(options: MockKnowledgeProviderOptions = {}) {
     this.articles = options.articles ?? DEFAULT_MOCK_KNOWLEDGE_ARTICLES;
-    this.audience = options.audience ?? 'employee';
     this.mode = options.mode ?? 'ok';
   }
 
@@ -64,14 +75,14 @@ export class MockKnowledgeProvider implements KnowledgePort {
     this.decisions.length = 0;
     const results: KnowledgeArticle[] = [];
     for (const article of this.articles) {
-      const decision = this.decideAuthorization(article);
-      this.decisions.push(decision);
-      if (decision.status !== 'granted') {
+      // Record the server-side decision for tests (never employee-facing).
+      this.decisions.push(article.authorizationDecision);
+      if (!this.matchesQuery(article, query)) {
         continue;
       }
-      if (this.matchesQuery(article, query)) {
-        results.push(article);
-      }
+      // Full metadata, no authorization prefiltering (v5.2 par. 3.4):
+      // the engine gates fail-closed. Quality is computed adapter-side.
+      results.push({ ...article, minimumQualityMet: computeQuality(article) });
     }
     return { results, outcome: results.length > 0 ? 'ok' : 'no_results' };
   }
@@ -86,38 +97,6 @@ export class MockKnowledgeProvider implements KnowledgePort {
     return this.capturedQueries;
   }
 
-  private decideAuthorization(article: KnowledgeArticle): KnowledgeAuthorizationDecision {
-    const meta = article.authorization;
-    const trustworthy =
-      meta !== undefined &&
-      typeof meta.policyId === 'string' &&
-      meta.policyId.length > 0 &&
-      Array.isArray(meta.allowedAudiences);
-    if (!trustworthy) {
-      // Fail-closed: untrustworthy metadata never grants access.
-      return {
-        decidedBy: 'knowledge-adapter',
-        articleId: article.id,
-        status: 'inconclusive',
-        reasonCategory: 'untrustworthy_authorization_metadata',
-      };
-    }
-    if (!meta.allowedAudiences.includes(this.audience)) {
-      return {
-        decidedBy: 'knowledge-adapter',
-        articleId: article.id,
-        status: 'denied',
-        reasonCategory: 'audience_not_allowed',
-      };
-    }
-    return {
-      decidedBy: 'knowledge-adapter',
-      articleId: article.id,
-      status: 'granted',
-      policyId: meta.policyId,
-    };
-  }
-
   private matchesQuery(article: KnowledgeArticle, query: KnowledgeSearchQuery): boolean {
     const keywordMatch = query.keywords.some((keyword) => article.keywords.includes(keyword));
     return (
@@ -127,6 +106,10 @@ export class MockKnowledgeProvider implements KnowledgePort {
       keywordMatch
     );
   }
+}
+
+function grantedDecision(policyId = 'policy-employee-kb'): KnowledgeAuthorizationDecision {
+  return { decidedBy: 'knowledge-adapter', decision: 'granted', policyId };
 }
 
 function publishedArticle(
@@ -142,28 +125,33 @@ function publishedArticle(
     title,
     summary,
     steps,
+    sourceReference: 'KB-' + id.toUpperCase(),
     status: 'published',
-    language: 'nl-NL',
+    language: 'nl',
     minimumQualityMet: true,
     validFrom: '2024-01-01T00:00:00.000Z',
     keywords: match.keywords ?? [],
     subject: match.subject,
     symptom: match.symptom,
     requestedResource: match.requestedResource,
-    authorization: { policyId: 'policy-employee-kb', allowedAudiences: ['employee'] },
+    authorizationDecision: grantedDecision(),
+    audiencePolicy: { allowedAudiences: ['employee'] },
     ...extra,
   };
 }
 
 /**
- * Fictional knowledge catalogue (BUILD_03.md par. 5). No real LV or
- * TOPdesk content. Includes explicit negative test items:
- * - mock-kb-006: restricted audience (denied for employees);
+ * Fictional knowledge catalogue (BUILD_03.md v5.2 par. 3.4). No real
+ * content. Negative test items per the approved specification:
+ * - mock-kb-006: denied for this employee (policy_denied);
  * - mock-kb-007: draft status (gated out);
  * - mock-kb-008: expired (validUntil in the past);
- * - mock-kb-009: minimum quality not met;
- * - mock-kb-010: untrustworthy authorization metadata (fail-closed);
- * - mock-kb-012: not yet valid (validFrom in the far future).
+ * - mock-kb-009: below the adapter-computed quality threshold (no steps);
+ * - mock-kb-010: inconclusive authorization (policy_unavailable);
+ * - mock-kb-012: not yet valid (validFrom in the far future);
+ * - mock-kb-013: contradictory granted WITHOUT policyId (fail-closed);
+ * - mock-kb-014: granted article with a non-fitting defense-in-depth
+ *   audience (employee must never see it).
  */
 export const DEFAULT_MOCK_KNOWLEDGE_ARTICLES: readonly KnowledgeArticle[] = [
   publishedArticle(
@@ -204,10 +192,17 @@ export const DEFAULT_MOCK_KNOWLEDGE_ARTICLES: readonly KnowledgeArticle[] = [
   publishedArticle(
     'mock-kb-006',
     'Intern afhandelingsprotocol',
-    'Intern protocol; niet bedoeld voor medewerkers.',
+    'Intern protocol; niet beschikbaar voor medewerkers.',
     ['Volg het interne protocol.'],
     { subject: 'Account' },
-    { authorization: { policyId: 'policy-servicedesk-only', allowedAudiences: ['servicedesk'] } },
+    {
+      authorizationDecision: {
+        decidedBy: 'knowledge-adapter',
+        decision: 'denied',
+        reasonCategory: 'policy_denied',
+      },
+      audiencePolicy: { allowedAudiences: ['servicedesk'] },
+    },
   ),
   publishedArticle(
     'mock-kb-007',
@@ -229,17 +224,22 @@ export const DEFAULT_MOCK_KNOWLEDGE_ARTICLES: readonly KnowledgeArticle[] = [
     'mock-kb-009',
     'Laptop traag (kwaliteit onvoldoende)',
     'Artikel heeft de minimale kwaliteitscontrole nog niet doorlopen.',
-    ['Controleer actieve programma\'s.'],
+    [],
     { subject: 'laptop' },
-    { minimumQualityMet: false },
   ),
   publishedArticle(
     'mock-kb-010',
     'Account-herstelprocedure',
-    'Artikel met onbetrouwbare autorisatiemetadata; fail-closed onzichtbaar.',
+    'Artikel waarvan het autorisatiebeleid niet beschikbaar is; fail-closed onzichtbaar.',
     ['Interne stap.'],
     { subject: 'Account' },
-    { authorization: { policyId: '', allowedAudiences: ['employee'] } },
+    {
+      authorizationDecision: {
+        decidedBy: 'knowledge-adapter',
+        decision: 'inconclusive',
+        reasonCategory: 'policy_unavailable',
+      },
+    },
   ),
   publishedArticle(
     'mock-kb-011',
@@ -251,9 +251,25 @@ export const DEFAULT_MOCK_KNOWLEDGE_ARTICLES: readonly KnowledgeArticle[] = [
   publishedArticle(
     'mock-kb-012',
     'Toekomstige laptopinstructie',
-    'Nog niet gepubliceerd geldig artikel.',
+    'Nog niet geldig artikel.',
     ['Stap.'],
     { subject: 'laptop' },
     { validFrom: '2100-01-01T00:00:00.000Z' },
+  ),
+  publishedArticle(
+    'mock-kb-013',
+    'Wachtwoordhulp intern (tegenstrijdig besluit)',
+    'Artikel met een granted-besluit zonder policyId; fail-closed onzichtbaar.',
+    ['Interne stap.'],
+    { subject: 'Account' },
+    { authorizationDecision: { decidedBy: 'knowledge-adapter', decision: 'granted' } },
+  ),
+  publishedArticle(
+    'mock-kb-014',
+    'Intern printerprotocol (defense-in-depth)',
+    'Granted artikel met een niet-passend audience-beleid.',
+    ['Interne stap.'],
+    { subject: 'printer' },
+    { audiencePolicy: { allowedAudiences: ['servicedesk'] } },
   ),
 ];

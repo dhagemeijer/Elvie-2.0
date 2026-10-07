@@ -56,9 +56,11 @@ describe('chat shell (UI smoke)', () => {
 
     const log = root.querySelector('.elvie-log');
     expect(log?.textContent).toContain('wachtwoord vergeten');
-    // Build 03 offers a simulated knowledge article (never a real TOPdesk registration).
+    // Build 03 offers a knowledge article in the fixed presentation format
+    // with a catalogue source citation (never a registration claim).
     expect(log?.textContent).toContain('Wachtwoord');
-    expect(log?.textContent).toContain('simulatie');
+    expect(log?.textContent).toContain('Bron: TOPdesk Kennisbank');
+    expect(log?.textContent).toContain('Lost dit je probleem op?');
     expect(input?.disabled).toBe(false);
     expect(input?.value).toBe('');
 

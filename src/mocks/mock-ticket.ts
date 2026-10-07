@@ -1,15 +1,25 @@
-import type { SubmissionKey, TicketDraft, TicketPort, TicketStatusResult, TicketSubmissionResult } from '../ports/ticket';
+import type {
+  SubmissionKey,
+  TicketDraft,
+  TicketPort,
+  TicketStatusResult,
+  TicketSubmissionResult,
+} from '../ports/ticket';
 
 /**
- * Development/test ticket mock (BUILD_03.md): a clearly fictional,
- * TOPdesk-independent simulation with no network calls and no storage.
+ * Development/test ticket mock (BUILD_03.md v5.2/v5.2.1): a clearly
+ * fictional, TOPdesk-independent simulation with no network calls and
+ * no storage.
  *
  * - idempotent per SubmissionKey: the same logical submission never
  *   produces a second ticket;
  * - fictional references use the approved SIM-<category>-<id> format;
- * - configurable failure modes cover the negative regression tests
- *   (definitive failure, timeout/transport exception, empty reference,
- *   wrong submission key, status-check exception);
+ * - timeout and transport failures are returned as kind 'unknown'
+ *   results (never thrown), so the engine's discriminated-union handling
+ *   is exercised directly; a separate 'exception' mode throws an unknown
+ *   transport error to exercise the engine's exception path;
+ * - configurable contract-violation modes cover the negative regression
+ *   tests (empty reference, wrong submission key, status-check exception);
  * - this mock NEVER represents a real TOPdesk registration; the engine
  *   communicates the simulation status to the employee.
  */
@@ -19,6 +29,7 @@ export type MockTicketFailureMode =
   | 'fail_invalid_draft'
   | 'timeout'
   | 'transport'
+  | 'exception'
   | 'empty_reference'
   | 'wrong_key';
 
@@ -48,25 +59,32 @@ export class MockTicketProvider implements TicketPort {
     this.failureMode = mode;
   }
 
-  async submit(draft: TicketDraft, submissionKey: SubmissionKey): Promise<TicketSubmissionResult> {
+  async submit(draft: TicketDraft): Promise<TicketSubmissionResult> {
     this.submitAttempts += 1;
-    this.lastSubmissionKey = submissionKey;
-    const existing = this.submissions.get(submissionKey.value);
+    const key = draft.submissionKey;
+    this.lastSubmissionKey = key;
+    const existing = this.submissions.get(key.value);
     if (existing !== undefined) {
       // Idempotent per key: the same logical submission, same result.
       return existing;
     }
-    const result = this.buildResult(draft, submissionKey);
-    this.submissions.set(submissionKey.value, result);
-    if (result.status === 'submitted' && result.reference.trim().length > 0) {
+    const result = this.buildResult(draft, key);
+    if (result !== undefined) {
+      this.submissions.set(key.value, result);
+    }
+    if (
+      result !== undefined &&
+      result.kind === 'submitted' &&
+      result.reference.trim().length > 0
+    ) {
       this.drafts.push(draft);
-      this.statuses.set(submissionKey.value, {
-        status: 'submitted',
-        submissionKey: submissionKey.value,
+      this.statuses.set(key.value, {
+        kind: 'submitted',
+        submissionKey: key,
         reference: result.reference,
       });
     }
-    return result;
+    return result as TicketSubmissionResult;
   }
 
   async getStatus(submissionKey: SubmissionKey): Promise<TicketStatusResult> {
@@ -78,19 +96,20 @@ export class MockTicketProvider implements TicketPort {
       return known;
     }
     // Unknown outcome without any received reference.
-    return { status: 'inconclusive', submissionKey: submissionKey.value };
+    return { kind: 'unknown', submissionKey };
   }
 
   /**
    * Test helper: simulate the backend later confirming an uncertain
-   * submission (recovery via getStatus, never via a second submit).
+   * submission (recovery via getStatus with the SAME key, never via a
+   * second submit).
    */
   resolveAsSubmitted(reference = 'SIM-incident-0421'): void {
     const key = this.lastSubmissionKey;
     if (key === undefined) {
       throw new Error('No submission key captured yet.');
     }
-    this.statuses.set(key.value, { status: 'submitted', submissionKey: key.value, reference });
+    this.statuses.set(key.value, { kind: 'submitted', submissionKey: key, reference });
   }
 
   /** Accepted drafts (fictional data only). */
@@ -98,37 +117,43 @@ export class MockTicketProvider implements TicketPort {
     return this.drafts;
   }
 
-  /** Number of actual submit calls (idempotency assertions). */
+  /** Number of actual submit calls (idempotency/recovery assertions). */
   get submitCallCount(): number {
     return this.submitAttempts;
   }
 
-  private buildResult(draft: TicketDraft, submissionKey: SubmissionKey): TicketSubmissionResult {
+  private buildResult(
+    draft: TicketDraft,
+    submissionKey: SubmissionKey,
+  ): TicketSubmissionResult | undefined {
     switch (this.failureMode) {
       case 'success':
         this.counter += 1;
         return {
-          status: 'submitted',
-          submissionKey: submissionKey.value,
+          kind: 'submitted',
+          submissionKey,
           reference: 'SIM-' + draft.category + '-' + String(this.counter).padStart(4, '0'),
         };
       case 'fail_rejected':
-        return { status: 'failed', submissionKey: submissionKey.value, reasonCategory: 'rejected' };
+        return { kind: 'failed', submissionKey, reasonCategory: 'rejected' };
       case 'fail_invalid_draft':
-        return { status: 'failed', submissionKey: submissionKey.value, reasonCategory: 'invalid_draft' };
+        return { kind: 'failed', submissionKey, reasonCategory: 'invalid_draft' };
       case 'timeout':
-        // Exception path: the engine maps this to an inconclusive outcome.
-        throw new Error('Simulated submission timeout');
+        // Uncertain outcome: returned as kind 'unknown' (v5.2 par. 10.1).
+        return { kind: 'unknown', submissionKey, reasonCategory: 'timeout' };
       case 'transport':
-        throw new Error('Simulated transport failure');
+        return { kind: 'unknown', submissionKey, reasonCategory: 'transport' };
+      case 'exception':
+        // Exception path: the engine maps this to an inconclusive outcome.
+        throw new Error('Simulated unknown transport failure');
       case 'empty_reference':
         // Deliberate contract violation for the negative regression test.
-        return { status: 'submitted', submissionKey: submissionKey.value, reference: '' };
+        return { kind: 'submitted', submissionKey, reference: '' };
       case 'wrong_key':
         // Deliberate contract violation for the negative regression test.
         return {
-          status: 'submitted',
-          submissionKey: submissionKey.value + '-other',
+          kind: 'submitted',
+          submissionKey: { value: submissionKey.value + '-other' },
           reference: 'SIM-' + draft.category + '-9999',
         };
     }

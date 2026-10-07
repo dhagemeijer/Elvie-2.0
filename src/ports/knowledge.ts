@@ -1,17 +1,17 @@
 /**
- * Knowledge port (BUILD_03.md): the only contract through which Elvie
+ * Knowledge port (BUILD_03.md v5.2): the only contract through which Elvie
  * consults service-desk knowledge. TOPdesk Knowledge Management is the
  * authoritative source; the real adapter arrives in a later build (Build 06).
  * The conversation domain depends only on this interface.
  *
- * Dataminimalisation (BUILD_03.md): every query field is a controlled,
+ * Dataminimalisation (v5.2 par. 4): every query field is a controlled,
  * explicitly allowlisted value (Build 02 recognition catalogue values and
  * symptom values). Raw employee input NEVER reaches this port.
  *
- * Authorization (BUILD_03.md): adapters MUST decide authorization
+ * Authorization (v5.2 par. 3): adapters MUST decide authorization
  * server-side, per article, before anything is returned. Denied or
- * untrustworthy (inconclusive) articles are invisible to the employee:
- * the response must never reveal that restricted knowledge exists.
+ * inconclusive articles are invisible to the employee: the response must
+ * never reveal that restricted knowledge exists.
  */
 
 /** Intent of the current conversation (Build 02 enum; phishing never searches). */
@@ -33,27 +33,42 @@ export interface KnowledgeSearchQuery {
 export type KnowledgeArticleStatus = 'published' | 'draft' | 'archived';
 
 /**
- * Trusted, server-side authorization metadata attached to an article.
- * Missing or contradictory metadata is treated fail-closed by adapters
- * (never as implicit access).
+ * Structured, server-side authorization decision per article (v5.2
+ * par. 3.1); a loose boolean is never sufficient proof. granted REQUIRES
+ * the policyId that allowed access; denied/inconclusive REQUIRE a safe
+ * reason category. The employee never sees any of this.
  */
-export interface KnowledgeArticleAuthorization {
-  readonly policyId: string;
+export interface KnowledgeAuthorizationDecision {
+  readonly decidedBy: 'knowledge-adapter';
+  readonly decision: 'granted' | 'denied' | 'inconclusive';
+  readonly policyId?: string;
+  readonly reasonCategory?: 'policy_unavailable' | 'identity_unverifiable' | 'policy_denied' | 'metadata_incomplete';
+}
+
+/**
+ * Defense-in-depth audience policy attached to an article (v5.2 par. 3.2).
+ * Independent of the adapter decision; both layers are separately
+ * testable.
+ */
+export interface KnowledgeArticleAudiencePolicy {
   readonly allowedAudiences: readonly string[];
 }
 
 /**
  * One knowledge article with the metadata Build 03 needs for publication,
- * validity, quality and deterministic matching. Article content never
- * enters logs (AUDIT_LOGGING.md).
+ * validity, quality and deterministic matching (v5.2 par. 3.4/5). Article
+ * content never enters logs (AUDIT_LOGGING.md).
  */
 export interface KnowledgeArticle {
   readonly id: string;
   readonly title: string;
   readonly summary: string;
   readonly steps: readonly string[];
+  /** Catalogue reference for the source citation in the presentation (par. 6). */
+  readonly sourceReference: string;
   readonly status: KnowledgeArticleStatus;
-  readonly language: 'nl-NL';
+  readonly language: 'nl';
+  /** Adapter-computed quality verdict (mock: title, source reference, >=1 step). */
   readonly minimumQualityMet: boolean;
   readonly validFrom: string;
   readonly validUntil?: string;
@@ -61,30 +76,16 @@ export interface KnowledgeArticle {
   readonly symptom?: string;
   readonly requestedResource?: string;
   readonly keywords: readonly string[];
-  readonly authorization: KnowledgeArticleAuthorization;
+  /** Mandatory structured server-side authorization decision (par. 3.1). */
+  readonly authorizationDecision: KnowledgeAuthorizationDecision;
+  /** Defense-in-depth audience policy (par. 3.2). */
+  readonly audiencePolicy: KnowledgeArticleAudiencePolicy;
 }
 
 /**
- * Server-side authorization decision per article (mandatory contract).
- * granted REQUIRES the policyId that allowed access; denied/inconclusive
- * REQUIRE a safe reason category. The employee never sees any of this.
- */
-export type KnowledgeAuthorizationDecision =
-  | {
-      readonly decidedBy: 'knowledge-adapter';
-      readonly articleId: string;
-      readonly status: 'granted';
-      readonly policyId: string;
-    }
-  | {
-      readonly decidedBy: 'knowledge-adapter';
-      readonly articleId: string;
-      readonly status: 'denied' | 'inconclusive';
-      readonly reasonCategory: string;
-    };
-
-/**
- * Search response. results contains ONLY authorized (granted) articles.
+ * Search response. The mock adapter returns full metadata without
+ * filtering up front (v5.2 par. 3.4); Elvie's own defense-in-depth
+ * gating (par. 5) is applied separately and remains testable.
  * outcome distinguishes a healthy empty result from an unavailable
  * knowledge dependency; it never distinguishes "only denied articles"
  * from "no articles at all" for the employee-facing text.
