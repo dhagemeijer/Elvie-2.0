@@ -19,44 +19,37 @@ function text(messages: readonly { text: string }[]): string {
   return messages.map((message) => message.text).join('\n');
 }
 
-describe('temporary diagnostics (removed before review)', () => {
-  it('dumps the recovery flow internals', async () => {
-    const tickets = new MockTicketProvider({ failureMode: 'timeout' });
-    const audit = new InMemoryAuditLogger();
-    const engine = new ConversationEngine({
-      identity: new MockIdentityProvider(),
-      knowledge: new EmptyKnowledgeProvider(),
-      ticket: tickets,
-      operational: consoleOperationalLogger(),
-      audit,
-    });
-    await engine.start();
-    const preview = text(await engine.handleEmployeeInput('printer print niet'));
-    const stateAfterInput = engine.currentState;
-    const first = text(await engine.handleEmployeeInput('versturen'));
-    const stateAfterFirst = engine.currentState;
-    const countAfterFirst = tickets.submitCallCount;
-    tickets.resolveAsSubmitted('SIM-incident-0421');
-    const recovered = text(await engine.handleEmployeeInput('versturen'));
-    const stateAfterRecovery = engine.currentState;
-    const countAfterRecovery = tickets.submitCallCount;
-    const dump = JSON.stringify({
-      preview: preview.slice(0, 400),
-      stateAfterInput,
-      first: first.slice(0, 400),
-      stateAfterFirst,
-      countAfterFirst,
-      recovered: recovered.slice(0, 400),
-      stateAfterRecovery,
-      countAfterRecovery,
-      drafts: tickets.submittedDrafts.length,
-      auditEvents: audit.recordedEvents.map((event) => [
-        event.action,
-        event.outcome,
-        event.reason ?? null,
-        event.targetId ?? null,
-      ]),
-    });
-    expect(dump).toBe('DIAGNOSTIC DUMP');
+async function probe(word: string): Promise<unknown> {
+  const tickets = new MockTicketProvider({ failureMode: 'timeout' });
+  const audit = new InMemoryAuditLogger();
+  const engine = new ConversationEngine({
+    identity: new MockIdentityProvider(),
+    knowledge: new EmptyKnowledgeProvider(),
+    ticket: tickets,
+    operational: consoleOperationalLogger(),
+    audit,
+  });
+  await engine.start();
+  await engine.handleEmployeeInput('printer print niet');
+  await engine.handleEmployeeInput('versturen');
+  tickets.resolveAsSubmitted('SIM-incident-0421');
+  const reply = text(await engine.handleEmployeeInput(word));
+  return {
+    word,
+    reply: reply.slice(0, 200),
+    state: engine.currentState,
+    submitCalls: tickets.submitCallCount,
+    auditEvents: audit.recordedEvents.map((event) => [event.action, event.outcome, event.reason ?? null]),
+  };
+}
+
+describe('temporary diagnostics v2 (removed before review)', () => {
+  it('probes status-check trigger words after an inconclusive submission', async () => {
+    const results = [];
+    results.push(await probe('status'));
+    results.push(await probe('ja'));
+    results.push(await probe('versturen'));
+    results.push(await probe('controleer de status'));
+    expect(JSON.stringify(results)).toBe('DIAGNOSTIC DUMP V2');
   });
 });
