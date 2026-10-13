@@ -39,7 +39,10 @@ Target fields:
 - actor role/authorization context where useful;
 - action;
 - target type and non-sensitive identifier;
-- outcome: success/denied/failed;
+- outcome: success/denied/failed/inconclusive; `inconclusive` records that the
+  outcome of an attempted action is genuinely unknown (e.g. a submission
+  interrupted by a timeout); it is never a substitute for success or failed
+  and never authorizes a retry (BUILD_03.md par. 11-12);
 - correlation/request ID;
 - source component;
 - reason/error category when safe;

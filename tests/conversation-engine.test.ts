@@ -1,23 +1,31 @@
 import { describe, expect, it } from 'vitest';
 import { ConversationEngine } from '../src/services/conversation-engine';
 import { MockIdentityProvider } from '../src/mocks/mock-identity';
-import { MockIncidentProvider } from '../src/mocks/mock-incident';
 import { MockKnowledgeProvider } from '../src/mocks/mock-knowledge';
+import { MockTicketProvider } from '../src/mocks/mock-ticket';
 import { InMemoryAuditLogger } from '../src/mocks/in-memory-audit-logger';
 import { consoleOperationalLogger } from '../src/mocks/console-operational-logger';
 import { unconfiguredIdentity } from '../src/ports/identity';
 
-function createTestEngine(): { engine: ConversationEngine; audit: InMemoryAuditLogger; incidents: MockIncidentProvider } {
+function createTestEngine(): {
+  engine: ConversationEngine;
+  audit: InMemoryAuditLogger;
+  tickets: MockTicketProvider;
+} {
   const audit = new InMemoryAuditLogger();
-  const incidents = new MockIncidentProvider();
+  const tickets = new MockTicketProvider();
   const engine = new ConversationEngine({
     identity: new MockIdentityProvider(),
     knowledge: new MockKnowledgeProvider(),
-    incidents,
+    ticket: tickets,
     operational: consoleOperationalLogger(),
     audit,
   });
-  return { engine, audit, incidents };
+  return { engine, audit, tickets };
+}
+
+function text(messages: readonly { text: string }[]): string {
+  return messages.map((message) => message.text).join('\n');
 }
 
 describe('ConversationEngine', () => {
@@ -32,46 +40,56 @@ describe('ConversationEngine', () => {
     const { engine } = createTestEngine();
     await engine.start();
     const search = await engine.handleEmployeeInput('wachtwoord vergeten');
-    expect(search.some((m) => m.text.includes('Wachtwoord vergeten'))).toBe(true);
+    expect(text(search)).toContain('Wachtwoord');
     const resolved = await engine.handleEmployeeInput('ja');
-    expect(resolved[resolved.length - 1]?.text).toContain('Fijn');
+    expect(text(resolved)).toContain('Fijn');
+    expect(engine.currentState).toBe('DONE');
   });
 
-  it('walks the intake path to a submitted incident with a fictional reference', async () => {
-    const { engine, audit, incidents } = createTestEngine();
+  it('walks the intake path to a simulated ticket with a fictional reference', async () => {
+    const { engine, audit, tickets } = createTestEngine();
     await engine.start();
-    await engine.handleEmployeeInput('printer print niet');
-    await engine.handleEmployeeInput('nee');
-    await engine.handleEmployeeInput('De printer op de tweede verdieping reageert niet.');
-    await engine.handleEmployeeInput('Hoofdgebouw, tweede verdieping');
-    const preview = await engine.handleEmployeeInput('nee nog even niet');
-    expect(preview.some((m) => m.text.includes('versturen'))).toBe(true);
+    const search = await engine.handleEmployeeInput('printer print niet');
+    expect(text(search)).toContain('Printer');
+    // The resolution series is exhausted deterministically; the knowledge
+    // store may offer symptom-matched articles before the intake.
+    let intake = await engine.handleEmployeeInput('niet opgelost');
+    let guard = 0;
+    while (!text(intake).includes('Bevestig om de simulatie af te ronden') && guard < 4) {
+      intake = await engine.handleEmployeeInput('niet opgelost');
+      guard += 1;
+    }
+    // The exhausted series routes to the generic intake and, because
+    // everything is already known, straight to the preview.
+    expect(text(intake)).toContain('Bevestig om de simulatie af te ronden');
+    expect(text(intake)).toContain('niets naar TOPdesk verzonden');
     const confirmed = await engine.handleEmployeeInput('versturen');
-    expect(confirmed[confirmed.length - 1]?.text).toMatch(/MOCK-INCIDENT-\d{4}/);
-    expect(incidents.submittedDrafts).toHaveLength(1);
-    const submissionEvent = audit.recordedEvents.find((event) => event.action === 'submit_incident');
+    expect(text(confirmed)).toMatch(/SIM-incident-\d{4}/);
+    expect(text(confirmed)).toContain('simulatie');
+    expect(tickets.submittedDrafts).toHaveLength(1);
+    const submissionEvent = audit.recordedEvents.find((event) => event.action === 'submit_ticket');
+    expect(submissionEvent?.eventType).toBe('ticket_submission');
     expect(submissionEvent?.outcome).toBe('success');
-    expect(submissionEvent?.targetId).toMatch(/^MOCK-INCIDENT-\d{4}$/);
+    expect(submissionEvent?.targetId).toMatch(/^SIM-incident-\d{4}$/);
   });
 
   it('blocks sensitive input server-side instead of storing or forwarding it', async () => {
-    const { engine, incidents } = createTestEngine();
+    const { engine, tickets } = createTestEngine();
     await engine.start();
     await engine.handleEmployeeInput('printer print niet');
-    await engine.handleEmployeeInput('nee');
+    await engine.handleEmployeeInput('niet opgelost');
     const warned = await engine.handleEmployeeInput('mijn BSN is 123456789 en het print niet');
-    expect(warned.some((m) => m.text.includes('gevoelige gegevens'))).toBe(true);
-    // No incident was submitted containing the sensitive value.
-    expect(incidents.submittedDrafts).toHaveLength(0);
+    expect(text(warned)).toContain('gevoelige gegevens');
+    // No ticket was submitted containing the sensitive value.
+    expect(tickets.submittedDrafts).toHaveLength(0);
   });
 
   it('fails closed on start when identity is not configured', async () => {
-    const { engine: _, audit, incidents } = createTestEngine();
-    void _; void incidents;
+    const audit = new InMemoryAuditLogger();
     const engine = new ConversationEngine({
       identity: unconfiguredIdentity(),
       knowledge: new MockKnowledgeProvider(),
-      incidents: new MockIncidentProvider(),
+      ticket: new MockTicketProvider(),
       operational: consoleOperationalLogger(),
       audit,
     });

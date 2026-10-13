@@ -1,6 +1,6 @@
 import { ConversationEngine } from '../services/conversation-engine';
 import { MockIdentityProvider } from '../mocks/mock-identity';
-import { MockIncidentProvider } from '../mocks/mock-incident';
+import { MockTicketProvider } from '../mocks/mock-ticket';
 import { MockKnowledgeProvider } from '../mocks/mock-knowledge';
 import { InMemoryAuditLogger } from '../mocks/in-memory-audit-logger';
 import { consoleOperationalLogger } from '../mocks/console-operational-logger';
@@ -16,7 +16,7 @@ export function createEngineWithMocks(): { engine: ConversationEngine; audit: In
   const engine = new ConversationEngine({
     identity: new MockIdentityProvider(),
     knowledge: new MockKnowledgeProvider(),
-    incidents: new MockIncidentProvider(),
+    ticket: new MockTicketProvider(),
     operational: consoleOperationalLogger(),
     audit,
   });
