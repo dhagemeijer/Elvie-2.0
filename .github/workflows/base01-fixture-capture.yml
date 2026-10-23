@@ -1,0 +1,187 @@
+# ELVIE 2.0 — BASE-01 Route B — TEMPORARY verification workflow (never merge to main)
+# Pinned baseline: 6a0ccb2f705decee6cb8c572ec14df26ad33c9c6 (tree 591faae3ea84fcb12f63c6fd4dd18848ee5319e1)
+#
+# Scope (CORRECTION 1): exactly THREE temporary files on the temporary branch
+#   `base01-verification`:
+#     1. .github/workflows/base01-fixture-capture.yml   (this file)
+#     2. tooling/vite.capture.config.mjs
+#     3. tooling/capture-fixtures.mjs
+#   Nothing else. This file MUST NOT be merged to main and the branch MUST be
+#   deleted after evidence download (separate owner authorizations A1-A6).
+#
+# Trigger: push-only on `base01-verification`. `workflow_dispatch` is NOT used
+# because GitHub only registers workflow_dispatch triggers for workflows that
+# exist on the default branch (docs.github.com/actions/reference/events-that-trigger-workflows).
+# Pushing the branch therefore starts the run exactly once; NO reruns and NO
+# additional pushes are allowed (owner rule; see also concurrency below).
+
+name: BASE-01 fixture capture (temporary, read-only verification)
+
+on:
+  push:
+    branches:
+      - base01-verification
+
+# Minimal permissions; no secrets; no product connections; no deployment.
+permissions:
+  contents: read
+
+# Hard guard against accidental parallel runs (no automatic reruns).
+concurrency:
+  group: base01-fixture-capture
+  cancel-in-progress: false
+
+env:
+  PINNED_SHA: '6a0ccb2f705decee6cb8c572ec14df26ad33c9c6'
+  PINNED_TREE: '591faae3ea84fcb12f63c6fd4dd18848ee5319e1'
+
+jobs:
+  capture:
+    name: BASE-01 fixture capture on pinned Build 03 baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # --- 1. Verification tooling (temporary branch) -------------------------
+      - name: Checkout verification tooling (temporary branch)
+        uses: actions/checkout@v4
+        with:
+          ref: base01-verification
+          persist-credentials: false
+
+      # --- 2. Application code (pinned baseline, separate workmap) -----------
+      - name: Checkout pinned Build 03 baseline (separate workmap)
+        uses: actions/checkout@v4
+        with:
+          repository: dhagemeijer/Elvie-2.0
+          ref: ${{ env.PINNED_SHA }}
+          path: baseline
+          persist-credentials: false
+
+      # --- 3. Fail-fast baseline identity check (SHA + tree) ------------------
+      - name: Verify pinned commit SHA and tree SHA (fail-fast)
+        run: |
+          set -euo pipefail
+          SHA="$(git -C baseline rev-parse HEAD)"
+          TREE="$(git -C baseline rev-parse 'HEAD^{tree}')"
+          echo "commit: $SHA"
+          echo "tree:   $TREE"
+          if [ "$SHA" != "$PINNED_SHA" ]; then echo "::error::SHA DRIFT - STOP"; exit 1; fi
+          if [ "$TREE" != "$PINNED_TREE" ]; then echo "::error::TREE DRIFT - STOP"; exit 1; fi
+
+      # --- 4. Environment record ------------------------------------------------
+      - name: Record execution environment
+        run: |
+          mkdir -p evidence
+          {
+            echo "pinned_sha: $PINNED_SHA"
+            echo "pinned_tree: $PINNED_TREE"
+            echo "branch: base01-verification"
+            echo "date_utc: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "runner: $(uname -a)"
+            echo "node_before_setup: $(node --version 2>/dev/null || echo none)"
+          } > evidence/environment.txt
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # --- 5. Dependencies (baseline only, isolated) -----------------------------
+      - name: Install baseline dependencies (npm ci, isolated workmap)
+        run: npm ci
+        working-directory: baseline
+
+      # --- 6. Quality gates: the FOUR existing verify.yml commands -------------
+      # (CORRECTION: reuse the exact existing commands; `npm run verify` exists
+      #  as an aggregate in package.json but the four separate gates give
+      #  individually attributable evidence, matching verify.yml.)
+      - name: Gate 1/4 — typecheck
+        run: npm run typecheck
+        working-directory: baseline
+      - name: Gate 2/4 — lint
+        run: npm run lint
+        working-directory: baseline
+      - name: Gate 3/4 — tests
+        run: npm run test
+        working-directory: baseline
+      - name: Gate 4/4 — production build
+        run: npm run build
+        working-directory: baseline
+
+      - name: Record post-setup environment
+        run: |
+          {
+            echo "node: $(node --version)"
+            echo "npm: $(npm --version)"
+          } >> evidence/environment.txt
+
+      # --- 7. Bundle the capture script (tooling workmap, baseline untouched) --
+      - name: Bundle capture script with baseline vite (no install, no baseline writes)
+        run: node baseline/node_modules/vite/bin/vite.js build --config tooling/vite.capture.config.mjs
+
+      # --- 8. Fixture capture (inlined baseline code, fictional data only) -----
+      - name: Run BASE-01 fixture capture
+        run: node tooling-dist/capture-bundle.mjs
+
+      # --- 9. FINAL VALIDATIONS — ALL BEFORE evidence upload (CORRECTION 3) ----
+      - name: Final validation A — main HEAD still pinned (no drift)
+        run: |
+          set -euo pipefail
+          MAIN_SHA="$(git ls-remote https://github.com/dhagemeijer/Elvie-2.0.git refs/heads/main | cut -f1)"
+          echo "main HEAD: $MAIN_SHA"
+          if [ "$MAIN_SHA" != "$PINNED_SHA" ]; then
+            echo "::error::main has moved from the pinned baseline - STOP, evidence invalid"; exit 1
+          fi
+
+      - name: Final validation B — baseline worktree unmodified by tooling
+        run: |
+          set -euo pipefail
+          # node_modules and the production build output are expected side
+          # effects of npm ci / npm run build; anything else means the
+          # verification tooling touched the baseline: STOP.
+          DIRTY="$(git -C baseline status --porcelain | grep -v -E 'node_modules/|^\?\? dist/' || true)"
+          if [ -n "$DIRTY" ]; then
+            echo "::error::baseline worktree modified outside allowed build outputs:"
+            echo "$DIRTY"
+            exit 1
+          fi
+
+      - name: Final validation C — evidence manifest and hashes present and consistent
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'EOF'
+          import { createHash } from 'node:crypto';
+          import { readFileSync, readdirSync } from 'node:fs';
+          const manifest = JSON.parse(readFileSync('evidence/BASE-01-MANIFEST.json', 'utf8'));
+          for (const f of manifest.files) {
+            const actual = createHash('sha256').update(readFileSync(`evidence/${f.name}`)).digest('hex');
+            if (actual !== f.sha256) { console.error(`hash mismatch: ${f.name}`); process.exit(1); }
+          }
+          const onDisk = readdirSync('evidence').filter(x => x.endsWith('.json') || x.endsWith('.txt'));
+          const listed = manifest.files.map(f => f.name);
+          const missing = listed.filter(x => !onDisk.includes(x));
+          if (missing.length) { console.error('missing files:', missing); process.exit(1); }
+          console.log('manifest + hashes consistent:', manifest.files.length, 'files');
+          EOF
+
+      # --- 10. Evidence upload (ONLY after all validations passed) -------------
+      - name: Upload BASE-01 evidence artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: base01-fixture-evidence
+          path: evidence/
+          retention-days: 14
+          if-no-files-found: error
+
+      # --- 11. Diagnostics upload (ONLY on failure; strictly separated) --------
+      - name: Upload BASE-01 diagnostics (failed run only)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: base01-fixture-diagnostics
+          path: |
+            diagnostics/
+            evidence/environment.txt
+          retention-days: 14
+          if-no-files-found: warn
