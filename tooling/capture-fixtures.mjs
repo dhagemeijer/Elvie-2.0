@@ -278,7 +278,7 @@ async function main() {
       generatedBy: 'tooling/capture-fixtures.mjs (tijdelijke BASE-01-verificatie, Route B)',
       determinism: {
         fixedNow: FIXED_NOW,
-        normalizationRules,
+        normalizeRules,
         serialization: 'JSON.stringify(value, null, 2) + "\\n" (hashes over deze exacte bytes)',
         note: 'stapvalidaties gebeuren op de ruwe tekst vóór normalisatie; de evidence bevat genormaliseerde tekst',
       },
