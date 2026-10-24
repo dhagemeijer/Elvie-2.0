@@ -23,7 +23,13 @@
  *   budget (R-04/R-05/R-10, §15.3).
  * - Evidence references are composite (FactCategory, capturedAtTurn,
  *   optional sourceRuleId) and are checked against the currently active
- *   fact record; stale references never count (§5.3, D04-14).
+ *   fact record; stale references never count (§5.3, D04-14). A decisive
+ *   route-level phrase is carried as typed phrase provenance (versioned
+ *   rule id + logical turn) alongside the validated facts — never as their
+ *   replacement, and never persisting raw input (§5.3 remediation).
+ * - The one-question clarification budget couples to the server-owned
+ *   material revision maintained by the engine (§15.3 remediation), not
+ *   merely to the five-field material fingerprint.
  */
 import type { ConversationContext } from './conversation-context';
 import { getFact } from './conversation-context';
@@ -48,11 +54,27 @@ export type TicketCategory = 'incident' | 'request' | 'security';
  * currently active fact record by category + logical capture turn, plus the
  * optional concluding rule. No new fact id is introduced.
  */
-export interface RoutingEvidenceRef {
+export interface RoutingFactEvidenceRef {
   readonly category: FactCategory;
   readonly capturedAtTurn: number;
   readonly sourceRuleId?: string;
 }
+
+/**
+ * Provenance for a route concluded by a decisive 04A route-level phrase
+ * (§5.3 remediation): the versioned rule id plus the logical turn in which
+ * the phrase was matched. A demonstrably equivalent provenance mechanism to
+ * the fact model: no second fact store, no raw-input retention; the
+ * conclusion is deterministic and re-computed per turn, and a phrase
+ * reference is current only for the turn it concluded.
+ */
+export interface RoutingPhraseEvidenceRef {
+  readonly kind: 'routing_phrase';
+  readonly ruleId: string;
+  readonly capturedAtTurn: number;
+}
+
+export type RoutingEvidenceRef = RoutingFactEvidenceRef | RoutingPhraseEvidenceRef;
 
 /**
  * Deterministic routing outcome (§5.3, behavioral sketch made concrete).
@@ -134,6 +156,8 @@ export const ROUTING_CLARIFICATION_QUESTIONS: Readonly<Record<string, string>> =
 export interface RoutingClarificationBookkeeping {
   readonly questionCode?: string;
   readonly materialFingerprint: string;
+  /** Server-owned material revision at which the question was asked (§15.3). */
+  readonly materialRevisionAtQuestion?: number;
 }
 
 /** Canonical projection of routing-relevant context state (§15.3). */
@@ -146,15 +170,25 @@ export function routingMaterialFingerprint(context: ConversationContext): string
   return [intent, app, device, symptom, indicators].join('|');
 }
 
-/** True when a routing clarification may be asked for the current situation. */
+/**
+ * True when a routing clarification may be asked (§15.3 remediation): the
+ * one-question budget couples to the server-owned material revision, not
+ * merely to the five-field fingerprint. Before any question was recorded a
+ * question is allowed; after a question, exactly one new question is allowed
+ * per material revision bump. Bookkeeping without a recorded revision is
+ * treated conservatively: never re-ask (fail-safe).
+ */
 export function canAskRoutingClarification(
   bookkeeping: RoutingClarificationBookkeeping,
-  context: ConversationContext,
+  currentMaterialRevision: number,
 ): boolean {
   if (bookkeeping.questionCode === undefined) {
     return true;
   }
-  return bookkeeping.materialFingerprint !== routingMaterialFingerprint(context);
+  return (
+    bookkeeping.materialRevisionAtQuestion !== undefined &&
+    currentMaterialRevision > bookkeeping.materialRevisionAtQuestion
+  );
 }
 
 /**
@@ -162,6 +196,11 @@ export function canAskRoutingClarification(
  * the category has an active fact record captured at the same logical turn.
  */
 export function isRoutingEvidenceCurrent(context: ConversationContext, ref: RoutingEvidenceRef): boolean {
+  if ('kind' in ref && ref.kind === 'routing_phrase') {
+    // Phrase provenance is current only for the turn it concluded; it never
+    // survives into later turns and never retains raw input.
+    return ref.capturedAtTurn === context.currentTurn;
+  }
   const record = getFact(context, ref.category);
   return record !== undefined && record.capturedAtTurn === ref.capturedAtTurn;
 }
@@ -198,6 +237,8 @@ export interface RoutingOptions {
   readonly rawInput?: string;
   /** One-question budget bookkeeping; omit when no clarification was asked yet. */
   readonly clarification?: RoutingClarificationBookkeeping;
+  /** Server-owned material revision for this turn (§15.3). */
+  readonly materialRevision?: number;
 }
 
 function factRef(context: ConversationContext, category: FactCategory, sourceRuleId?: string): RoutingEvidenceRef | undefined {
@@ -206,6 +247,10 @@ function factRef(context: ConversationContext, category: FactCategory, sourceRul
     return undefined;
   }
   return { category, capturedAtTurn: record.capturedAtTurn, sourceRuleId };
+}
+
+function phraseRef(context: ConversationContext, ruleId: string): RoutingPhraseEvidenceRef {
+  return { kind: 'routing_phrase', ruleId, capturedAtTurn: context.currentTurn };
 }
 
 function matchedPhrase(normalizedInput: string | undefined, ruleId: string): boolean {
@@ -252,13 +297,19 @@ export function computeRouting(context: ConversationContext, options: RoutingOpt
     };
   }
 
-  const loginEvidence =
-    matchedPhrase(normalizedInput, 'route_login_blocked') || symptomFact?.sourceRuleId === 'symptom_login_block';
+  const loginPhraseMatched = matchedPhrase(normalizedInput, 'route_login_blocked');
+  const loginFactEvidence = symptomFact?.sourceRuleId === 'symptom_login_block';
+  const loginEvidence = loginPhraseMatched || loginFactEvidence;
 
   // 2. Access (R-02, F-01): login/account evidence wins over incidental
   // device mentions ("laptop login blocked" is access, not workplace).
   if (loginEvidence && (appFact !== undefined || deviceFact !== undefined)) {
     const refs: RoutingEvidenceRef[] = [];
+    if (loginPhraseMatched && !loginFactEvidence) {
+      // §5.3 remediation: the decisive recognition phrase is carried as
+      // typed provenance next to the validated facts, never replacing them.
+      refs.push(phraseRef(context, 'route_login_blocked'));
+    }
     const symptomRef = factRef(context, 'symptom', symptomFact?.sourceRuleId);
     if (symptomRef !== undefined) {
       refs.push(symptomRef);
@@ -279,14 +330,20 @@ export function computeRouting(context: ConversationContext, options: RoutingOpt
   // 3. Connectivity (§5.1 guardrail): a generic "cannot reach a service" is
   // only network-related with concrete network evidence (no-connection
   // symptom plus a device or explicit network vocabulary).
+  const networkPhraseMatched = matchedPhrase(normalizedInput, 'route_network_failure');
   const networkEvidence =
     symptomFact?.sourceRuleId === 'symptom_no_connection' &&
-    (deviceFact !== undefined || matchedPhrase(normalizedInput, 'route_network_failure'));
+    (deviceFact !== undefined || networkPhraseMatched);
   if (networkEvidence) {
     const refs: RoutingEvidenceRef[] = [];
     const symptomRef = factRef(context, 'symptom', 'symptom_no_connection');
     if (symptomRef !== undefined) {
       refs.push(symptomRef);
+    }
+    if (deviceFact === undefined && networkPhraseMatched) {
+      // §5.3 remediation: the network phrase is decisive only when no
+      // validated device fact exists; carry it as typed provenance.
+      refs.push(phraseRef(context, 'route_network_failure'));
     }
     return {
       status: 'determined',
@@ -303,7 +360,10 @@ export function computeRouting(context: ConversationContext, options: RoutingOpt
   // unknown fallback once the budget for this situation is spent (R-05/R-10).
   if (appFact !== undefined && symptomFact !== undefined) {
     if (COMMUNICATION_APPLICATIONS.includes(appFact.value)) {
-      if (options.clarification !== undefined && !canAskRoutingClarification(options.clarification, context)) {
+      if (
+        options.clarification !== undefined &&
+        !canAskRoutingClarification(options.clarification, options.materialRevision ?? 0)
+      ) {
         return {
           status: 'unknown',
           category,
@@ -347,6 +407,11 @@ export function computeRouting(context: ConversationContext, options: RoutingOpt
     const deviceRef = factRef(context, 'device');
     if (deviceRef !== undefined) {
       refs.push(deviceRef);
+    }
+    if (powerFailure) {
+      // §5.3 remediation: when the power phrase decides the route, it is
+      // carried as explicit provenance, not merely an implied device fact.
+      refs.push(phraseRef(context, 'route_power_failure'));
     }
     const symptomRef = symptomFact === undefined ? undefined : factRef(context, 'symptom', symptomFact.sourceRuleId);
     if (symptomRef !== undefined) {
