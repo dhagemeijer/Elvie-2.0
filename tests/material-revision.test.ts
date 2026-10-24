@@ -8,7 +8,7 @@ describe('material state projection and revision (BUILD 04A §15.3 final remedia
     const context = createConversationContext('session-1', '2026-01-01T00:00:00.000Z');
     context.currentTurn = 1;
     context.intent = 'incident';
-    context.intentClassification = { value: 'incident', confidence: 'high', evidence: ['doet het niet'] };
+    context.intentClassification = { value: 'incident', confidence: 'high', evidence: [] };
     return context;
   }
 
