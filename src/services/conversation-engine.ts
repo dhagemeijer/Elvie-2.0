@@ -12,6 +12,14 @@ import { FACT_QUESTIONS } from '../domain/conversation-decision';
 import { buildKnowledgeQuery } from '../domain/knowledge-request';
 import { gateKnowledgeArticles, rankKnowledgeArticles, type RankedKnowledgeArticle } from '../domain/knowledge-ranking';
 import { calculateMissingFacts, FICTIONAL_REQUIREMENT_RULES } from '../domain/requirements';
+import { nextMaterialRevision } from '../domain/material-revision';
+import {
+  computeRouting,
+  ROUTING_CLARIFICATION_QUESTIONS,
+  routingMaterialFingerprint,
+  type RoutingClarificationBookkeeping,
+  type RoutingResult,
+} from '../domain/routing';
 import { applyTransition } from '../domain/state-machine';
 import type { IdentityPort } from '../ports/identity';
 import type { KnowledgeArticle, KnowledgePort } from '../ports/knowledge';
@@ -127,6 +135,21 @@ export class ConversationEngine {
   private readonly now: () => string;
   private readonly audience: string;
 
+  /** Build 04A: latest functional routing result (internal; no lifecycle effect). */
+  private routing: RoutingResult | null = null;
+
+  /** Build 04A: one-question routing clarification budget bookkeeping. */
+  private routingClarification: RoutingClarificationBookkeeping = { materialFingerprint: '' };
+
+  /** Build 04A §15.3: server-owned material revision (one bump per material change). */
+  private materialRevision = 0;
+
+  /** Build 04A §15.3: material fingerprint after the last accepted turn. */
+  private materialSignature = '';
+
+  /** Build 04A §15.3: per-session serialisation of routing updates. */
+  private routingUpdateChain: Promise<void> = Promise.resolve();
+
   constructor(private readonly deps: ConversationEngineDeps) {
     this.texts = { ...DEFAULT_ENGINE_TEXTS, ...deps.texts };
     this.now = deps.now ?? nowIso;
@@ -139,6 +162,23 @@ export class ConversationEngine {
   }
 
   /**
+   * Build 04A: latest functional routing result for diagnostics/tests; null
+   * before the first processed employee message. Purely informative in this
+   * build: routing never changes messages, decisions or lifecycle state.
+   */
+  public get currentRouting(): RoutingResult | null {
+    return this.routing;
+  }
+
+  /**
+   * Build 04A §15.3: server-owned material revision for diagnostics/tests.
+   * Starts at 0 and rises exactly once per material context change.
+   */
+  public get currentMaterialRevision(): number {
+    return this.materialRevision;
+  }
+
+  /**
    * Start a conversation. Authenticates first: when identity is not
    * configured, the engine fails closed and never creates a session.
    */
@@ -148,6 +188,11 @@ export class ConversationEngine {
       this.actorId = employee.id;
       this.context = createConversationContext(makeId(), nowIso());
       this.rankedArticles = [];
+      this.routing = null;
+      this.routingClarification = { materialFingerprint: '' };
+      this.materialRevision = 0;
+      this.materialSignature = routingMaterialFingerprint(this.context);
+      this.routingUpdateChain = Promise.resolve();
       this.operational('info', 'conversation started', 'success');
       return [
         {
@@ -246,6 +291,7 @@ export class ConversationEngine {
     }
 
     const { decision } = processEmployeeMessage(context, text);
+    await this.enqueueRoutingUpdate(text);
     // Safe diagnostics only: decision category, never raw input content.
     this.operational('info', 'employee message processed', 'success', decision.kind);
 
@@ -258,8 +304,17 @@ export class ConversationEngine {
         return [{ role: 'elvie', text: decision.text }];
       case 'security_sensitive_route':
         return this.handleSecurityRoute();
-      case 'sufficient_understanding':
+      case 'sufficient_understanding': {
+        // BUILD 04A §5.2 remediation: when routing needs its ONE targeted
+        // question, it is shown here and the conversation stays in
+        // UNDERSTAND; the deterministic core keeps priority with its own
+        // questions and a security-sensitive route always stays leading.
+        const routingQuestion = this.pendingRoutingQuestion();
+        if (routingQuestion !== undefined) {
+          return [routingQuestion];
+        }
         return this.searchKnowledge();
+      }
     }
   }
 
@@ -461,13 +516,14 @@ export class ConversationEngine {
    * as a rejection. Explicit feedback words are honoured as feedback;
    * other input enriches the context and re-offers the same article.
    */
-  private handleResolutionClarification(text: string): readonly ChatMessage[] {
+  private async handleResolutionClarification(text: string): Promise<readonly ChatMessage[]> {
     const context = this.requireContext();
     const feedback = classifyResolutionFeedback(text);
     if (feedback !== undefined) {
       return this.handleResolutionFeedback(text);
     }
     processEmployeeMessage(context, text);
+    await this.enqueueRoutingUpdate(text);
     const article = this.currentArticle();
     context.knowledgePhase = 'awaiting_feedback';
     if (article === undefined) {
@@ -520,19 +576,18 @@ export class ConversationEngine {
    * twice), and ask only for the next genuinely missing category.
    */
   private handleIntake(text: string): Promise<readonly ChatMessage[]> {
-    const result = this.processIntakeAnswer(text);
-    return Promise.resolve(result);
+    return this.processIntakeAnswer(text);
   }
 
   private handleCompleteContext(text: string): Promise<readonly ChatMessage[]> {
-    const result = this.processIntakeAnswer(text);
-    return Promise.resolve(result);
+    return this.processIntakeAnswer(text);
   }
 
-  private processIntakeAnswer(text: string): readonly ChatMessage[] {
+  private async processIntakeAnswer(text: string): Promise<readonly ChatMessage[]> {
     const context = this.requireContext();
     const pending = context.pendingIntakeCategory;
     processEmployeeMessage(context, text);
+    await this.enqueueRoutingUpdate(text);
     context.pendingIntakeCategory = undefined;
     if (pending !== undefined && !hasReliableFact(context, pending)) {
       // The employee answered, but the deterministic core could not derive
@@ -757,6 +812,75 @@ export class ConversationEngine {
       throw new Error('Conversation not started');
     }
     return this.context;
+  }
+
+  /**
+   * Build 04A: recompute the functional routing after the deterministic
+   * core processed a message. Internal/diagnostic in this build: the
+   * result never changes lifecycle state or the existing decision flow.
+   */
+  private updateRouting(text: string): void {
+    const context = this.context;
+    if (context === null) {
+      return;
+    }
+    this.routing = computeRouting(context, {
+      rawInput: text,
+      materialRevision: this.materialRevision,
+      clarification: this.routingClarification,
+    });
+  }
+
+  /**
+   * Build 04A §15.3 remediation: central, server-owned material revision.
+   * Compares the routing-relevant context before (the signature after the
+   * last accepted turn) and after the accepted turn: the revision rises
+   * exactly once per material change and never for administrative
+   * bookkeeping alone (identical material states keep the revision).
+   * Serialised per session via the routing update chain.
+   */
+  private enqueueRoutingUpdate(text: string): Promise<void> {
+    const run = (): void => {
+      const context = this.context;
+      if (context === null) {
+        return;
+      }
+      const after = routingMaterialFingerprint(context);
+      this.materialRevision = nextMaterialRevision(this.materialSignature, after, this.materialRevision);
+      this.materialSignature = after;
+      this.updateRouting(text);
+    };
+    const chained = this.routingUpdateChain.then(run, run);
+    this.routingUpdateChain = chained;
+    return chained;
+  }
+
+  /**
+   * Build 04A §5.2/§15.3 remediation: the ONE targeted routing question,
+   * shown only when the deterministic core itself needs no question and
+   * the routing budget allows it. The budget is recorded exactly at the
+   * moment the question is actually shown, coupled to the current
+   * server-owned material revision; an answer adding no material evidence
+   * never resets the budget. Returns undefined when no question may be
+   * asked (the ordinary flow then continues undisturbed).
+   */
+  private pendingRoutingQuestion(): ChatMessage | undefined {
+    const context = this.context;
+    const routing = this.routing;
+    if (context === null || routing === null || routing.status !== 'clarification_required') {
+      return undefined;
+    }
+    const questionText = ROUTING_CLARIFICATION_QUESTIONS[routing.questionCode];
+    if (questionText === undefined) {
+      return undefined;
+    }
+    this.routingClarification = {
+      questionCode: routing.questionCode,
+      materialFingerprint: routingMaterialFingerprint(context),
+      materialRevisionAtQuestion: this.materialRevision,
+    };
+    this.operational('info', 'routing clarification asked', 'success', routing.questionCode);
+    return { role: 'elvie', text: questionText };
   }
 
   /**
