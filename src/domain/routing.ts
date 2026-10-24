@@ -233,7 +233,6 @@ export function computeRouting(context: ConversationContext, options: RoutingOpt
   const appFact = getFact(context, 'serviceOrApplication');
   const deviceFact = getFact(context, 'device');
   const symptomFact = getFact(context, 'symptom');
-  const indicatorsFact = getFact(context, 'securityIndicators');
   const normalizedInput = options.rawInput === undefined ? undefined : normalizeInput(options.rawInput);
 
   // 1. Security-first (§15.1.2, §5.2.1): a security-sensitive case stays on
