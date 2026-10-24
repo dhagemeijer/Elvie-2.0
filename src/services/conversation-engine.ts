@@ -12,7 +12,7 @@ import { FACT_QUESTIONS } from '../domain/conversation-decision';
 import { buildKnowledgeQuery } from '../domain/knowledge-request';
 import { gateKnowledgeArticles, rankKnowledgeArticles, type RankedKnowledgeArticle } from '../domain/knowledge-ranking';
 import { calculateMissingFacts, FICTIONAL_REQUIREMENT_RULES } from '../domain/requirements';
-import { nextMaterialRevision } from '../domain/material-revision';
+import { materialStateProjection, nextMaterialRevision } from '../domain/material-revision';
 import {
   computeRouting,
   ROUTING_CLARIFICATION_QUESTIONS,
@@ -144,11 +144,14 @@ export class ConversationEngine {
   /** Build 04A §15.3: server-owned material revision (one bump per material change). */
   private materialRevision = 0;
 
-  /** Build 04A §15.3: material fingerprint after the last accepted turn. */
+  /** Build 04A §15.3: canonical material-state signature after the last accepted turn. */
   private materialSignature = '';
 
   /** Build 04A §15.3: per-session serialisation of routing updates. */
   private routingUpdateChain: Promise<void> = Promise.resolve();
+
+  /** Build 04A §15.3 final: serialises complete employee message processing per session. */
+  private messageProcessingChain: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly deps: ConversationEngineDeps) {
     this.texts = { ...DEFAULT_ENGINE_TEXTS, ...deps.texts };
@@ -191,8 +194,9 @@ export class ConversationEngine {
       this.routing = null;
       this.routingClarification = { materialFingerprint: '' };
       this.materialRevision = 0;
-      this.materialSignature = routingMaterialFingerprint(this.context);
+      this.materialSignature = this.materialSignatureAfter(this.context);
       this.routingUpdateChain = Promise.resolve();
+      this.messageProcessingChain = Promise.resolve();
       this.operational('info', 'conversation started', 'success');
       return [
         {
@@ -228,8 +232,24 @@ export class ConversationEngine {
     }
   }
 
-  /** Handle one line of employee input, deterministically per current state. */
-  async handleEmployeeInput(text: string): Promise<readonly ChatMessage[]> {
+  /**
+   * Handle one line of employee input, deterministically per current
+   * state. BUILD 04A §15.3 final remediation: the COMPLETE employee
+   * message processing is serialised per session, so concurrent messages
+   * can never interleave context mutations, material revision
+   * determination or routing decisions within one session.
+   */
+  handleEmployeeInput(text: string): Promise<readonly ChatMessage[]> {
+    const process = (): Promise<readonly ChatMessage[]> => this.processEmployeeTurn(text);
+    const chained = this.messageProcessingChain.then(process, process);
+    this.messageProcessingChain = chained.then(
+      () => undefined,
+      () => undefined,
+    );
+    return chained;
+  }
+
+  private async processEmployeeTurn(text: string): Promise<readonly ChatMessage[]> {
     const context = this.context;
     if (context === null) {
       return [{ role: 'error', text: 'Er is nog geen gesprek gestart.' }];
@@ -587,7 +607,6 @@ export class ConversationEngine {
     const context = this.requireContext();
     const pending = context.pendingIntakeCategory;
     processEmployeeMessage(context, text);
-    await this.enqueueRoutingUpdate(text);
     context.pendingIntakeCategory = undefined;
     if (pending !== undefined && !hasReliableFact(context, pending)) {
       // The employee answered, but the deterministic core could not derive
@@ -595,6 +614,9 @@ export class ConversationEngine {
       // question is never asked again (never knowingly ask twice).
       recordAnswer(context, pending, text.trim());
     }
+    // §15.3: the turn commit runs AFTER the validated answer is retained,
+    // so the material revision rises in the turn that produced it.
+    await this.enqueueRoutingUpdate(text);
     return this.advanceIntake();
   }
 
@@ -815,6 +837,30 @@ export class ConversationEngine {
   }
 
   /**
+   * §15.3 final: canonical FULL material-state signature of the context,
+   * including the budget-independent routing decision it implies.
+   */
+  private materialSignatureAfter(context: ConversationContext): string {
+    return materialStateProjection(context, this.routingDecisionOf(context));
+  }
+
+  /**
+   * §15.3: routing decision implied by the material context ALONE:
+   * computed without clarification bookkeeping, so a spent clarification
+   * budget never masquerades as a material change.
+   */
+  private routingDecisionOf(context: ConversationContext): string {
+    const snapshot = computeRouting(context, { rawInput: '' });
+    if (snapshot.status === 'determined') {
+      return snapshot.route + '~' + snapshot.ruleIds.join(',');
+    }
+    if (snapshot.status === 'clarification_required') {
+      return snapshot.status + '~' + snapshot.questionCode;
+    }
+    return snapshot.status + '~' + snapshot.reasonCode;
+  }
+
+  /**
    * Build 04A: recompute the functional routing after the deterministic
    * core processed a message. Internal/diagnostic in this build: the
    * result never changes lifecycle state or the existing decision flow.
@@ -832,12 +878,12 @@ export class ConversationEngine {
   }
 
   /**
-   * Build 04A §15.3 remediation: central, server-owned material revision.
-   * Compares the routing-relevant context before (the signature after the
-   * last accepted turn) and after the accepted turn: the revision rises
-   * exactly once per material change and never for administrative
-   * bookkeeping alone (identical material states keep the revision).
-   * Serialised per session via the routing update chain.
+   * Build 04A §15.3 final remediation: central, server-owned material
+   * revision. Compares the canonical FULL material-state projection before
+   * (the signature after the last accepted turn) and after the accepted
+   * turn: the revision rises exactly once per material change and never
+   * for administrative bookkeeping alone (identical material states keep
+   * the revision). Runs inside the serialised per-session turn processing.
    */
   private enqueueRoutingUpdate(text: string): Promise<void> {
     const run = (): void => {
@@ -845,7 +891,7 @@ export class ConversationEngine {
       if (context === null) {
         return;
       }
-      const after = routingMaterialFingerprint(context);
+      const after = this.materialSignatureAfter(context);
       this.materialRevision = nextMaterialRevision(this.materialSignature, after, this.materialRevision);
       this.materialSignature = after;
       this.updateRouting(text);
