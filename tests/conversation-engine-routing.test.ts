@@ -42,7 +42,8 @@ describe('ConversationEngine — Build 04A routing integration', () => {
   it('keeps a security-sensitive case on the security path and bypasses knowledge search (R-06)', async () => {
     const engine = createTestEngine();
     await engine.start();
-    await engine.handleEmployeeInput('Ik heb op een verdachte link geklikt.');
+    // Fixture phrasing follows the approved Build 02 security catalog (sec_link_clicked).
+    await engine.handleEmployeeInput('Ik heb op een link geklikt.');
     // Existing Build 03 behavior: knowledge search is bypassed, the
     // conversation goes straight to the specialized security intake.
     expect(engine.currentState).toBe('INTAKE');
