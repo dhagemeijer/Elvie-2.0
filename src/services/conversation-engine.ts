@@ -12,6 +12,12 @@ import { FACT_QUESTIONS } from '../domain/conversation-decision';
 import { buildKnowledgeQuery } from '../domain/knowledge-request';
 import { gateKnowledgeArticles, rankKnowledgeArticles, type RankedKnowledgeArticle } from '../domain/knowledge-ranking';
 import { calculateMissingFacts, FICTIONAL_REQUIREMENT_RULES } from '../domain/requirements';
+import {
+  computeRouting,
+  routingMaterialFingerprint,
+  type RoutingClarificationBookkeeping,
+  type RoutingResult,
+} from '../domain/routing';
 import { applyTransition } from '../domain/state-machine';
 import type { IdentityPort } from '../ports/identity';
 import type { KnowledgeArticle, KnowledgePort } from '../ports/knowledge';
@@ -127,6 +133,12 @@ export class ConversationEngine {
   private readonly now: () => string;
   private readonly audience: string;
 
+  /** Build 04A: latest functional routing result (internal; no lifecycle effect). */
+  private routing: RoutingResult | null = null;
+
+  /** Build 04A: one-question routing clarification budget bookkeeping. */
+  private routingClarification: RoutingClarificationBookkeeping = { materialFingerprint: '' };
+
   constructor(private readonly deps: ConversationEngineDeps) {
     this.texts = { ...DEFAULT_ENGINE_TEXTS, ...deps.texts };
     this.now = deps.now ?? nowIso;
@@ -139,6 +151,15 @@ export class ConversationEngine {
   }
 
   /**
+   * Build 04A: latest functional routing result for diagnostics/tests; null
+   * before the first processed employee message. Purely informative in this
+   * build: routing never changes messages, decisions or lifecycle state.
+   */
+  public get currentRouting(): RoutingResult | null {
+    return this.routing;
+  }
+
+  /**
    * Start a conversation. Authenticates first: when identity is not
    * configured, the engine fails closed and never creates a session.
    */
@@ -148,6 +169,8 @@ export class ConversationEngine {
       this.actorId = employee.id;
       this.context = createConversationContext(makeId(), nowIso());
       this.rankedArticles = [];
+      this.routing = null;
+      this.routingClarification = { materialFingerprint: '' };
       this.operational('info', 'conversation started', 'success');
       return [
         {
@@ -246,6 +269,7 @@ export class ConversationEngine {
     }
 
     const { decision } = processEmployeeMessage(context, text);
+    this.updateRouting(text);
     // Safe diagnostics only: decision category, never raw input content.
     this.operational('info', 'employee message processed', 'success', decision.kind);
 
@@ -468,6 +492,7 @@ export class ConversationEngine {
       return this.handleResolutionFeedback(text);
     }
     processEmployeeMessage(context, text);
+    this.updateRouting(text);
     const article = this.currentArticle();
     context.knowledgePhase = 'awaiting_feedback';
     if (article === undefined) {
@@ -533,6 +558,7 @@ export class ConversationEngine {
     const context = this.requireContext();
     const pending = context.pendingIntakeCategory;
     processEmployeeMessage(context, text);
+    this.updateRouting(text);
     context.pendingIntakeCategory = undefined;
     if (pending !== undefined && !hasReliableFact(context, pending)) {
       // The employee answered, but the deterministic core could not derive
@@ -729,7 +755,7 @@ export class ConversationEngine {
       this.auditSubmission('inconclusive', 'submission_contract_violation');
       this.operational(
         'error',
-        'ticket status contract violation',
+        'ticket status check contract violation',
         'failure',
         'submission_contract_violation',
       );
@@ -757,6 +783,29 @@ export class ConversationEngine {
       throw new Error('Conversation not started');
     }
     return this.context;
+  }
+
+  /**
+   * Build 04A: recompute the functional routing after the deterministic
+   * core processed a message. Internal/diagnostic only in this build: the
+   * result never changes lifecycle state, messages or the existing
+   * decision flow. When the routing needs one targeted clarification, its
+   * one-question budget is recorded against the current material
+   * fingerprint (§15.3); an answer adding no material evidence never
+   * resets that budget.
+   */
+  private updateRouting(text: string): void {
+    const context = this.context;
+    if (context === null) {
+      return;
+    }
+    this.routing = computeRouting(context, { rawInput: text, clarification: this.routingClarification });
+    if (this.routing.status === 'clarification_required') {
+      this.routingClarification = {
+        questionCode: this.routing.questionCode,
+        materialFingerprint: routingMaterialFingerprint(context),
+      };
+    }
   }
 
   /**
