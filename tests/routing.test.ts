@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ConversationContext } from '../src/domain/conversation-context';
 import { createConversationContext, setFactRecord } from '../src/domain/conversation-context';
 import { processEmployeeMessage } from '../src/domain/conversation-core';
+import { nextMaterialRevision } from '../src/domain/material-revision';
 import {
   canAskRoutingClarification,
   computeRouting,
@@ -9,6 +10,7 @@ import {
   isRoutingEvidenceCurrent,
   routingMaterialFingerprint,
   type RoutingClarificationBookkeeping,
+  type RoutingEvidenceRef,
   type RoutingResult,
 } from '../src/domain/routing';
 
@@ -90,13 +92,19 @@ describe('BUILD 04A — routing acceptance matrix R-01..R-10', () => {
   it('R-05: an unresolved clarification falls back to a safe unknown route', () => {
     const context = newContext();
     turn(context, 'Mijn Outlook doet het niet.');
-    // The clarification was asked; record its one-question budget.
+    // The clarification was asked; record its one-question budget against
+    // the server-owned material revision (§15.3).
     const bookkeeping: RoutingClarificationBookkeeping = {
       questionCode: 'routing_app_or_communication',
       materialFingerprint: routingMaterialFingerprint(context),
+      materialRevisionAtQuestion: 1,
     };
     // The answer adds no material routing evidence.
-    const afterBudget = computeRouting(context, { rawInput: 'weet niet', clarification: bookkeeping });
+    const afterBudget = computeRouting(context, {
+      rawInput: 'weet niet',
+      materialRevision: 1,
+      clarification: bookkeeping,
+    });
     expect(afterBudget).toMatchObject({ status: 'unknown', reasonCode: 'clarification_budget_exhausted' });
   });
 
@@ -129,7 +137,9 @@ describe('BUILD 04A — routing acceptance matrix R-01..R-10', () => {
     const after = turn(context, 'Sorry, het is geen laptopprobleem, ik kan niet bij mijn account.');
     expect(after).toMatchObject({ status: 'determined', route: 'access' });
     if (after.status === 'determined') {
-      const accountRef = after.evidenceRefs.find((ref) => ref.category === 'serviceOrApplication');
+      const accountRef = after.evidenceRefs.find(
+        (ref) => 'category' in ref && ref.category === 'serviceOrApplication',
+      );
       if (accountRef !== undefined) {
         expect(accountRef.capturedAtTurn).toBe(2);
         expect(isRoutingEvidenceCurrent(context, accountRef)).toBe(true);
@@ -160,11 +170,16 @@ describe('BUILD 04A — routing acceptance matrix R-01..R-10', () => {
     const bookkeeping: RoutingClarificationBookkeeping = {
       questionCode: 'routing_app_or_communication',
       materialFingerprint: routingMaterialFingerprint(context),
+      materialRevisionAtQuestion: 1,
     };
-    expect(canAskRoutingClarification(bookkeeping, context)).toBe(false);
+    expect(canAskRoutingClarification(bookkeeping, 1)).toBe(false);
     // Repeating the same non-distinguishing answer changes nothing material.
     turn(context, 'geen idee');
-    const stillBudgeted = computeRouting(context, { rawInput: 'geen idee', clarification: bookkeeping });
+    const stillBudgeted = computeRouting(context, {
+      rawInput: 'geen idee',
+      materialRevision: 1,
+      clarification: bookkeeping,
+    });
     expect(stillBudgeted).toMatchObject({ status: 'unknown', reasonCode: 'clarification_budget_exhausted' });
   });
 });
@@ -284,13 +299,15 @@ describe('BUILD 04A — evidence and clarification bookkeeping', () => {
     const bookkeeping: RoutingClarificationBookkeeping = {
       questionCode: 'routing_app_or_communication',
       materialFingerprint: fingerprintBefore,
+      materialRevisionAtQuestion: 1,
     };
-    expect(canAskRoutingClarification(bookkeeping, context)).toBe(false);
+    expect(canAskRoutingClarification(bookkeeping, 1)).toBe(false);
 
-    // A material correction changes the fingerprint and resets the budget.
+    // A material correction bumps the material revision and re-allows exactly
+    // one new question (§15.3).
     turn(context, 'Sorry, het is mijn Account, ik kan er niet bij.');
     expect(routingMaterialFingerprint(context)).not.toBe(fingerprintBefore);
-    expect(canAskRoutingClarification(bookkeeping, context)).toBe(true);
+    expect(canAskRoutingClarification(bookkeeping, 2)).toBe(true);
   });
 
   it('produces identical fingerprints for identical material situations', () => {
@@ -299,5 +316,106 @@ describe('BUILD 04A — evidence and clarification bookkeeping', () => {
     const b = newContext();
     turn(b, 'Mijn Outlook doet het niet.');
     expect(routingMaterialFingerprint(a)).toBe(routingMaterialFingerprint(b));
+  });
+});
+
+describe('BUILD 04A §5.3 remediation — phrase provenance and material revision', () => {
+  function incidentContext(): ConversationContext {
+    const context = newContext();
+    context.currentTurn = 1;
+    context.intentClassification = { value: 'incident', confidence: 'high', evidence: [] };
+    context.intent = 'incident';
+    return context;
+  }
+
+  function phraseRefs(result: RoutingResult): RoutingEvidenceRef[] {
+    if (result.status !== 'determined') {
+      return [];
+    }
+    return result.evidenceRefs.filter((ref) => 'kind' in ref && ref.kind === 'routing_phrase');
+  }
+
+  it('carries the decisive power-failure phrase as explicit, current provenance', () => {
+    const context = incidentContext();
+    setFactRecord(context, 'device', { value: 'laptop', kind: 'explicit', capturedAtTurn: 1 });
+    const result = computeRouting(context, { rawInput: 'hij start niet' });
+    expect(result).toMatchObject({ status: 'determined', route: 'workplace', ruleIds: ['R-WORKPLACE-POWER'] });
+    const refs = phraseRefs(result);
+    expect(refs).toHaveLength(1);
+    const phrase = refs[0];
+    if (phrase === undefined) {
+      throw new Error('expected phrase provenance');
+    }
+    expect(phrase).toMatchObject({ kind: 'routing_phrase', ruleId: 'route_power_failure', capturedAtTurn: 1 });
+    expect(isRoutingEvidenceCurrent(context, phrase)).toBe(true);
+    // Phrase provenance never survives into a later logical turn.
+    context.currentTurn += 1;
+    expect(isRoutingEvidenceCurrent(context, phrase)).toBe(false);
+  });
+
+  it('carries the login phrase only when no validated login symptom fact exists (F-01)', () => {
+    const viaPhrase = incidentContext();
+    setFactRecord(viaPhrase, 'device', { value: 'laptop', kind: 'explicit', capturedAtTurn: 1 });
+    const phraseResult = computeRouting(viaPhrase, { rawInput: 'Ik kan niet bij mijn account.' });
+    expect(phraseResult).toMatchObject({ status: 'determined', route: 'access' });
+    expect(phraseRefs(phraseResult)).toHaveLength(1);
+    expect(phraseRefs(phraseResult)[0]).toMatchObject({ ruleId: 'route_login_blocked' });
+
+    // The validated symptom_login_block fact decides; no phrase provenance.
+    const viaFact = newContext();
+    const factResult = turn(viaFact, 'Ik kan niet inloggen op mijn account.');
+    expect(factResult).toMatchObject({ status: 'determined', route: 'access' });
+    expect(phraseRefs(factResult)).toHaveLength(0);
+  });
+
+  it('carries the network phrase only when no validated device fact exists', () => {
+    const noDevice = incidentContext();
+    setFactRecord(noDevice, 'serviceOrApplication', { value: 'Outlook', kind: 'explicit', capturedAtTurn: 1 });
+    setFactRecord(noDevice, 'symptom', {
+      value: 'geen verbinding',
+      kind: 'explicit',
+      capturedAtTurn: 1,
+      sourceRuleId: 'symptom_no_connection',
+    });
+    const withPhrase = computeRouting(noDevice, { rawInput: 'geen verbinding met het wifi netwerk' });
+    expect(withPhrase).toMatchObject({ status: 'determined', route: 'connectivity' });
+    const refs = phraseRefs(withPhrase);
+    expect(refs).toHaveLength(1);
+    const phrase = refs[0];
+    if (phrase !== undefined) {
+      expect(phrase).toMatchObject({ ruleId: 'route_network_failure' });
+      expect(isRoutingEvidenceCurrent(noDevice, phrase)).toBe(true);
+    }
+
+    const withDevice = newContext();
+    const deviceResult = turn(
+      withDevice,
+      'Mijn laptop op kantoor maakt sinds vanochtend geen verbinding met wifi.',
+    );
+    expect(deviceResult).toMatchObject({ status: 'determined', route: 'connectivity' });
+    expect(phraseRefs(deviceResult)).toHaveLength(0);
+  });
+
+  it('couples the one-question budget to the server-owned material revision (§15.3)', () => {
+    const untouched: RoutingClarificationBookkeeping = { materialFingerprint: 'f' };
+    expect(canAskRoutingClarification(untouched, 0)).toBe(true);
+    const asked: RoutingClarificationBookkeeping = {
+      questionCode: 'routing_app_or_communication',
+      materialFingerprint: 'f',
+      materialRevisionAtQuestion: 2,
+    };
+    expect(canAskRoutingClarification(asked, 2)).toBe(false);
+    expect(canAskRoutingClarification(asked, 3)).toBe(true);
+    // Bookkeeping without a recorded revision is fail-safe: never re-ask.
+    const withoutRevision: RoutingClarificationBookkeeping = {
+      questionCode: 'routing_app_or_communication',
+      materialFingerprint: 'f',
+    };
+    expect(canAskRoutingClarification(withoutRevision, 99)).toBe(false);
+  });
+
+  it('bumps the material revision exactly once per material change (§15.3)', () => {
+    expect(nextMaterialRevision('incident|Outlook|-|-|-', 'incident|Outlook|-|-|-', 3)).toBe(3);
+    expect(nextMaterialRevision('incident|Outlook|-|-|-', 'incident|Outlook|laptop|-|-', 3)).toBe(4);
   });
 });
