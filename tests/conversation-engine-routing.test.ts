@@ -171,3 +171,43 @@ describe('ConversationEngine — BUILD 04A remediation (§5.2, §15.3)', () => {
     expect(text(reply)).toContain('niet registreren of versturen');
   });
 });
+
+describe('ConversationEngine — BUILD 04A §15.3 final remediation', () => {
+  it('serialises two concurrent employee messages within one session', async () => {
+    const engine = createTestEngine();
+    await engine.start();
+    // Two messages submitted concurrently (same session) are processed
+    // completely serially: context mutations, revision determination and
+    // routing decisions can never interleave.
+    const [first, second] = await Promise.all([
+      engine.handleEmployeeInput('Mijn Outlook doet het niet.'),
+      engine.handleEmployeeInput('op mijn laptop'),
+    ]);
+    // Arrival order: first the deterministic core's device question...
+    expect(text(first)).toContain('Op welk apparaat');
+    // ...then, with the device known, the ONE targeted routing question.
+    expect(text(second)).toContain("Antwoord met 'applicatie' of 'berichten'");
+    expect(engine.currentState).toBe('UNDERSTAND');
+    // Exactly one revision bump per materially changed turn (2 turns).
+    expect(engine.currentMaterialRevision).toBe(2);
+  });
+
+  it('keeps the clarification budget correctly spent after a non-informative answer', async () => {
+    const engine = createTestEngine();
+    await engine.start();
+    await engine.handleEmployeeInput('Mijn Outlook doet het niet.');
+    const question = await engine.handleEmployeeInput('op mijn laptop');
+    expect(text(question)).toContain("Antwoord met 'applicatie' of 'berichten'");
+    const revisionAtQuestion = engine.currentMaterialRevision;
+    // The non-distinguishing answer adds no new material evidence:
+    // no revision bump and no second routing question.
+    const answer = await engine.handleEmployeeInput('applicatie');
+    expect(engine.currentMaterialRevision).toBe(revisionAtQuestion);
+    expect(text(answer)).not.toContain("Antwoord met 'applicatie' of 'berichten'");
+    expect(text(answer)).toContain('opgelost');
+    expect(engine.currentRouting).toMatchObject({
+      status: 'unknown',
+      reasonCode: 'clarification_budget_exhausted',
+    });
+  });
+});
