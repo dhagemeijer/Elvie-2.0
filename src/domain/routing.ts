@@ -196,10 +196,10 @@ export function canAskRoutingClarification(
  * the category has an active fact record captured at the same logical turn.
  */
 export function isRoutingEvidenceCurrent(context: ConversationContext, ref: RoutingEvidenceRef): boolean {
-  if ('kind' in ref && ref.kind === 'routing_phrase') {
+  if ('kind' in ref) {
     // Phrase provenance is current only for the turn it concluded; it never
     // survives into later turns and never retains raw input.
-    return ref.capturedAtTurn === context.currentTurn;
+    return ref.kind === 'routing_phrase' && ref.capturedAtTurn === context.currentTurn;
   }
   const record = getFact(context, ref.category);
   return record !== undefined && record.capturedAtTurn === ref.capturedAtTurn;
