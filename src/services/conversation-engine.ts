@@ -755,7 +755,7 @@ export class ConversationEngine {
       this.auditSubmission('inconclusive', 'submission_contract_violation');
       this.operational(
         'error',
-        'ticket status check contract violation',
+        'ticket status contract violation',
         'failure',
         'submission_contract_violation',
       );
