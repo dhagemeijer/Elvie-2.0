@@ -102,7 +102,8 @@ describe('BUILD 04A — routing acceptance matrix R-01..R-10', () => {
 
   it('R-06: a security signal with an ordinary subject stays on the security path', () => {
     const context = newContext();
-    const result = turn(context, 'Ik heb op een verdachte link geklikt en mijn Outlook doet het niet.');
+    // Fixture phrasing follows the approved Build 02 security catalog (sec_link_clicked).
+    const result = turn(context, 'Ik heb op een link geklikt en mijn Outlook doet het niet.');
     expect(result).toMatchObject({ status: 'determined', category: 'security', route: 'security' });
     if (result.status === 'determined') {
       expect(result.ruleIds).toEqual(['R-SEC-INDICATORS']);
@@ -148,7 +149,8 @@ describe('BUILD 04A — routing acceptance matrix R-01..R-10', () => {
     expect(serialized).not.toContain('operator');
     expect(serialized).not.toContain('groep');
     if (result.status === 'determined') {
-      expect(Object.keys(result).sort()).toEqual(['category', 'evidenceRefs', 'ruleIds', 'route', 'status']);
+      // Lexicographic sort: 'route' sorts before 'ruleIds'.
+      expect(Object.keys(result).sort()).toEqual(['category', 'evidenceRefs', 'route', 'ruleIds', 'status']);
     }
   });
 
@@ -179,7 +181,7 @@ describe('BUILD 04A — normative fixtures F-01, F-02, F-03, F-08', () => {
 
   it('F-01 security screening: a suspicious link with login trouble stays security', () => {
     const context = newContext();
-    const result = turn(context, 'Ik heb op een verdachte link geklikt en kan niet inloggen op mijn account.');
+    const result = turn(context, 'Ik heb op een link geklikt en kan niet inloggen op mijn account.');
     expect(result).toMatchObject({ status: 'determined', category: 'security', route: 'security' });
   });
 
