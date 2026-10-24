@@ -56,8 +56,12 @@ describe('ConversationEngine Build 02 integration', () => {
     expect(text(first)).toContain('Op welk apparaat');
     const second = await engine.handleEmployeeInput('op mijn laptop');
     expect(text(second)).not.toContain('Op welk apparaat');
+    // BUILD 04A §5.2 remediation: the ONE targeted routing question is shown
+    // once the core itself needs no further question.
+    expect(text(second)).toContain("Antwoord met 'applicatie' of 'berichten'");
+    const third = await engine.handleEmployeeInput('applicatie');
     // Sufficient understanding continues to the Build 03 knowledge flow:
-    expect(text(second)).toContain('opgelost');
+    expect(text(third)).toContain('opgelost');
   });
 
   it('never asks for an already-known device (wifi laptop sentence)', async () => {
