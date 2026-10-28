@@ -396,3 +396,139 @@ describe('BUILD 05 — accessibility, mobile and hardening', () => {
     root.remove();
   });
 });
+
+describe('BUILD 05 — targeted fixes: reset lifecycle and typed quick replies', () => {
+  function resetButton(root: HTMLElement): HTMLButtonElement {
+    const btn = [...root.querySelectorAll('button')].find((b) => b.textContent === 'Nieuw gesprek');
+    if (btn === undefined) {
+      throw new Error('reset button not found');
+    }
+    return btn as HTMLButtonElement;
+  }
+
+  it('A. the reset button is inert during the async boot', async () => {
+    const root = document.createElement('div');
+    document.body.append(root);
+    let created = 0;
+    const factory = (): ConversationEngine => {
+      created += 1;
+      return createEngine();
+    };
+    createChatShell(root, factory(), { createEngine: factory });
+    // During the async boot the shell is busy: the reset button is
+    // locked and a click cannot start a second session.
+    expect(resetButton(root).disabled).toBe(true);
+    resetButton(root).click();
+    expect(created).toBe(1);
+    await flush(root);
+    expect(resetButton(root).disabled).toBe(false);
+    expect(logText(root)).toContain('Elvie');
+    root.remove();
+  });
+
+  it('B. the reset button is inert while a turn is being processed', async () => {
+    const root = document.createElement('div');
+    document.body.append(root);
+    let created = 0;
+    const factory = (): ConversationEngine => {
+      created += 1;
+      return createEngine();
+    };
+    createChatShell(root, factory(), { createEngine: factory });
+    await flush(root);
+    submit(root, 'printer print niet');
+    // In-flight turn: the busy lock covers the reset button.
+    expect(resetButton(root).disabled).toBe(true);
+    resetButton(root).click();
+    expect(created).toBe(1);
+    await flush(root);
+    // The turn was not discarded: the message and reply are still there.
+    expect(resetButton(root).disabled).toBe(false);
+    expect(logText(root)).toContain('printer print niet');
+    root.remove();
+  });
+
+  it('C. an in-flight submission is never hidden or aborted by a reset', async () => {
+    const port = new DeferredTicketPort();
+    const root = document.createElement('div');
+    document.body.append(root);
+    let created = 0;
+    const factory = (): ConversationEngine => {
+      created += 1;
+      return createEngine(port);
+    };
+    createChatShell(root, factory(), { createEngine: factory });
+    await flush(root);
+    await driveToPreview(root);
+
+    submit(root, 'bevestigen');
+    // Deferred submission in flight: a reset would hide the pending
+    // outcome, so the button is locked.
+    expect(resetButton(root).disabled).toBe(true);
+    resetButton(root).click();
+    expect(created).toBe(1);
+
+    port.release('SIM-incident-0421');
+    await flush(root);
+    await flush(root);
+    expect(port.calls).toBe(1);
+    expect(logText(root)).toContain('SIM-incident-0421');
+
+    // Only after the submission completed safely is a reset allowed.
+    expect(resetButton(root).disabled).toBe(false);
+    resetButton(root).click();
+    await flush(root);
+    expect(created).toBe(2);
+    // Fresh session: the completed reference is gone from the log.
+    expect(logText(root)).not.toContain('SIM-incident-0421');
+    expect(logText(root)).toContain('Elvie');
+    // The completed submission was never aborted or repeated.
+    expect(port.calls).toBe(1);
+    root.remove();
+  });
+
+  it('D. quick replies follow the typed engine phases, never text fragments', async () => {
+    const root = document.createElement('div');
+    document.body.append(root);
+    mount(root);
+    await flush(root);
+    // START: only the explicit-unknown affordance.
+    expect(chips(root).map((c) => c.textContent)).toEqual(['Weet ik niet']);
+
+    // KNOWLEDGE_SEARCH (awaiting_feedback): the three-way answers only,
+    // even though the article text mentions words like 'opgelost'.
+    submit(root, 'printer print niet');
+    await flush(root);
+    expect(chips(root).map((c) => c.textContent)).toEqual([
+      'Opgelost',
+      'Niet opgelost',
+      'Onduidelijk',
+    ]);
+
+    // Drive to the preview via the chips.
+    let guard = 0;
+    while (!logText(root).includes('Categorie:') && guard < 10) {
+      if (chips(root).some((c) => c.textContent === 'Niet opgelost')) {
+        clickChip(root, 'Niet opgelost');
+      } else {
+        submit(root, 'niet opgelost');
+      }
+      await flush(root);
+      guard += 1;
+    }
+    expect(logText(root)).toContain('Categorie:');
+
+    // PREVIEW, confirmable: a confirmation chip and nothing else.
+    const labels = chips(root).map((c) => c.textContent);
+    expect(labels).toContain('Bevestigen (simulatie)');
+    expect(labels).not.toContain('Status controleren');
+    expect(labels).not.toContain('Opnieuw bevestigen');
+
+    submit(root, 'bevestigen');
+    await flush(root);
+    expect(logText(root)).toMatch(/SIM-incident-\d{4}/);
+    // CONFIRM is terminal: no quick replies remain.
+    expect(chips(root)).toHaveLength(0);
+    root.remove();
+  });
+});

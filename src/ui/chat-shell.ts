@@ -1,4 +1,4 @@
-import type { ChatMessage, ConversationEngine } from '../services/conversation-engine';
+import type { ChatMessage, ConversationEngine, PresentationSnapshot } from '../services/conversation-engine';
 
 /**
  * BUILD 05 — Employee-facing chat shell (user experience).
@@ -10,13 +10,21 @@ import type { ChatMessage, ConversationEngine } from '../services/conversation-e
  *   parallel decision logic in the frontend;
  * - the ticket preview is rendered strictly FROM the engine's own preview
  *   message (the server-owned snapshot), never from a frontend copy;
- * - quick-reply buttons only expose commands the engine deterministically
- *   understands ('bevestigen', 'niet opgelost', 'klaar', 'status', the
- *   explicit unknown phrase, ...);
+ * - quick replies are derived exclusively from the engine's TYPED
+ *   PresentationSnapshot (lifecycle state, knowledge phase, submission
+ *   status), never from message text fragments: article or error texts can
+ *   never produce commands;
  * - no conversation content is logged, stored in localStorage or sent
  *   anywhere else; the browser never calls TOPdesk directly;
  * - the simulation character is always visible (header badge and the
  *   engine's own simulation-honest texts).
+ *
+ * Targeted fixes (review 5b71753):
+ * - the reset button participates in the busy lock: a new conversation can
+ *   never hide or abort in-flight engine work (boot, turn, submission);
+ * - every (re)start is a new session generation; callbacks of a stale
+ *   session can no longer append messages, toggle buttons/status or move
+ *   the focus. An allowed reset always uses a FRESH engine instance.
  *
  * Accessibility: full keyboard operation, visible focus, aria-live log,
  * busy status, 44px+ touch targets (see elvie.css), responsive layout for
@@ -37,15 +45,38 @@ interface QuickReply {
   readonly command: string;
 }
 
+/**
+ * Session generation registry shared by all mounts of one shell: the
+ * active session id. Incremented on every (re)start; a mount is current
+ * exactly while its id equals the active one.
+ */
+interface SessionRegistry {
+  active: number;
+}
+
 export function createChatShell(
   root: HTMLElement,
   engine: ConversationEngine,
   options: ChatShellOptions = {},
 ): void {
-  mount(root, engine, options);
+  const registry: SessionRegistry = { active: 0 };
+  const startSession = (sessionEngine: ConversationEngine): void => {
+    registry.active += 1;
+    mountSession(root, sessionEngine, options, registry, startSession);
+  };
+  startSession(engine);
 }
 
-function mount(root: HTMLElement, engine: ConversationEngine, options: ChatShellOptions): void {
+function mountSession(
+  root: HTMLElement,
+  engine: ConversationEngine,
+  options: ChatShellOptions,
+  registry: SessionRegistry,
+  startSession: (sessionEngine: ConversationEngine) => void,
+): void {
+  const sessionId = registry.active;
+  const isCurrent = (): boolean => registry.active === sessionId;
+
   root.innerHTML = '';
 
   const shell = document.createElement('section');
@@ -78,17 +109,26 @@ function mount(root: HTMLElement, engine: ConversationEngine, options: ChatShell
   badge.setAttribute('role', 'note');
 
   header.append(identity, badge);
-  if (options.createEngine !== undefined) {
-    const reset = document.createElement('button');
+
+  const reset =
+    options.createEngine !== undefined
+      ? document.createElement('button')
+      : null;
+  if (reset !== null) {
     reset.type = 'button';
     reset.className = 'elvie-reset';
     reset.textContent = 'Nieuw gesprek';
     reset.setAttribute('aria-label', 'Nieuw gesprek starten');
     reset.addEventListener('click', () => {
+      if (busy) {
+        // A reset never hides or aborts in-flight engine work (boot, turn,
+        // submission): while Elvie processes, the button is locked.
+        return;
+      }
       const freshEngine = options.createEngine?.();
       if (freshEngine !== undefined) {
         // A new conversation is a NEW engine session: no state is reused.
-        mount(root, freshEngine, options);
+        startSession(freshEngine);
       }
     });
     header.append(reset);
@@ -136,7 +176,6 @@ function mount(root: HTMLElement, engine: ConversationEngine, options: ChatShell
 
   // --- State -------------------------------------------------------------
   let busy = false;
-  let lastElvieText = '';
 
   const scrollToBottom = (): void => {
     log.scrollTop = log.scrollHeight;
@@ -191,7 +230,6 @@ function mount(root: HTMLElement, engine: ConversationEngine, options: ChatShell
   };
 
   const appendElvieMessage = (text: string): void => {
-    lastElvieText = text;
     // Multi-line engine text (knowledge article, ticket preview) is
     // rendered exactly once as a structured card.
     if (text.includes('\n')) {
@@ -230,48 +268,74 @@ function mount(root: HTMLElement, engine: ConversationEngine, options: ChatShell
   };
 
   /**
-   * Quick replies are derived deterministically from the LAST engine
-   * message only. Each chip sends a plain, engine-recognized command: no
-   * frontend decision logic, no new commands.
+   * Quick replies are derived exclusively from the engine's typed
+   * PresentationSnapshot (lifecycle state, knowledge phase, submission
+   * status). Each chip sends a plain, engine-recognized command that the
+   * CURRENT engine phase permits:
+   * - confirmation buttons only when the snapshot is confirmable;
+   * - a status check only after an inconclusive submission;
+   * - a retry only after a definitive failure, still as an explicit
+   *   confirmation so the engine's own rules (fresh confirmation, current
+   *   snapshot) stay authoritative;
+   * - no command is ever derived from message text: knowledge articles and
+   *   error texts can never produce buttons.
    */
-  const quickRepliesFor = (engineText: string): readonly QuickReply[] => {
+  const quickRepliesFor = (snapshot: PresentationSnapshot): readonly QuickReply[] => {
     const replies: QuickReply[] = [];
-    if (engineText.includes('Bevestig om de simulatie af te ronden')) {
-      replies.push({ label: 'Bevestigen (simulatie)', command: 'bevestigen' });
+    switch (snapshot.state) {
+      case 'START':
+      case 'UNDERSTAND':
+        // Safe way to indicate unknown information (I-03/I-05/F-04).
+        replies.push({ label: 'Weet ik niet', command: 'weet ik niet' });
+        return replies;
+      case 'KNOWLEDGE_SEARCH':
+        if (snapshot.knowledgePhase === 'awaiting_feedback') {
+          replies.push(
+            { label: 'Opgelost', command: 'opgelost' },
+            { label: 'Niet opgelost', command: 'niet opgelost' },
+            { label: 'Onduidelijk', command: 'onduidelijk' },
+          );
+        } else if (snapshot.knowledgePhase === 'dependency_error') {
+          replies.push(
+            { label: 'Opnieuw zoeken', command: 'opnieuw' },
+            { label: 'Direct vastleggen als melding', command: 'melding' },
+          );
+        }
+        return replies;
+      case 'INTAKE':
+      case 'COMPLETE_CONTEXT':
+        // The security intake hands over safely via 'klaar' (F-06/I-10).
+        if (snapshot.intakeType === 'security') {
+          replies.push({ label: 'Klaar, verder', command: 'klaar' });
+        } else {
+          replies.push({ label: 'Weet ik niet', command: 'weet ik niet' });
+        }
+        return replies;
+      case 'PREVIEW':
+        if (snapshot.statusCheckable) {
+          // Recovery after an uncertain outcome: status check with the
+          // SAME submission key; never a second submit (S-05).
+          replies.push({ label: 'Status controleren', command: 'status' });
+        } else if (snapshot.confirmable) {
+          // A retry after a definitive failure still requires a fresh
+          // explicit confirmation (S-08/S-18).
+          replies.push({
+            label: snapshot.submissionStatus === 'failed' ? 'Opnieuw bevestigen' : 'Bevestigen (simulatie)',
+            command: 'bevestigen',
+          });
+        } else if (snapshot.previewCorrectionQuestionOpen) {
+          replies.push({ label: 'Weet ik niet', command: 'weet ik niet' });
+        }
+        return replies;
+      default:
+        // DONE/CONFIRM/RESOLVE/SUBMIT: terminal or transitional, no chips.
+        return replies;
     }
-    if (engineText.includes('Lost dit je probleem op?')) {
-      replies.push(
-        { label: 'Opgelost', command: 'opgelost' },
-        { label: 'Niet opgelost', command: 'niet opgelost' },
-        { label: 'Onduidelijk', command: 'onduidelijk' },
-      );
-    }
-    if (engineText.includes("'klaar'")) {
-      replies.push({ label: 'Klaar, verder', command: 'klaar' });
-    }
-    if (engineText.includes("'opnieuw'")) {
-      replies.push(
-        { label: 'Opnieuw zoeken', command: 'opnieuw' },
-        { label: 'Direct vastleggen als melding', command: 'melding' },
-      );
-    }
-    if (engineText.includes('niet zeker of de simulatie')) {
-      replies.push({ label: 'Status controleren', command: 'status' });
-    }
-    if (engineText.includes('Het versturen is niet gelukt')) {
-      // A retry requires a fresh explicit confirmation (S-08/S-18).
-      replies.push({ label: 'Opnieuw bevestigen', command: 'bevestigen' });
-    }
-    if (replies.length === 0 && engineText.includes('?')) {
-      // Safe way to indicate unknown information (I-03/I-05/F-04).
-      replies.push({ label: 'Weet ik niet', command: 'weet ik niet' });
-    }
-    return replies;
   };
 
   const renderChips = (): void => {
     chips.innerHTML = '';
-    for (const reply of quickRepliesFor(lastElvieText)) {
+    for (const reply of quickRepliesFor(engine.currentPresentation)) {
       const chip = document.createElement('button');
       chip.type = 'button';
       chip.className = 'elvie-chip';
@@ -289,6 +353,11 @@ function mount(root: HTMLElement, engine: ConversationEngine, options: ChatShell
     busy = next;
     input.disabled = next;
     send.disabled = next;
+    if (reset !== null) {
+      // The reset button participates in the busy lock: no new session can
+      // be started while engine work is in flight.
+      reset.disabled = next;
+    }
     status.hidden = !next;
     log.setAttribute('aria-busy', next ? 'true' : 'false');
     for (const chip of chips.querySelectorAll('button.elvie-chip')) {
@@ -309,14 +378,21 @@ function mount(root: HTMLElement, engine: ConversationEngine, options: ChatShell
     return engine
       .handleEmployeeInput(text)
       .then((messages) => {
-        appendMessages(messages);
+        if (isCurrent()) {
+          appendMessages(messages);
+        }
       })
       .catch(() => {
-        appendMessages([
-          { role: 'error', text: 'Er ging iets mis. Probeer het opnieuw.' },
-        ]);
+        if (isCurrent()) {
+          appendMessages([
+            { role: 'error', text: 'Er ging iets mis. Probeer het opnieuw.' },
+          ]);
+        }
       })
       .finally(() => {
+        if (!isCurrent()) {
+          return;
+        }
         setBusy(false);
         renderChips();
       });
@@ -344,15 +420,22 @@ function mount(root: HTMLElement, engine: ConversationEngine, options: ChatShell
   void engine
     .start()
     .then((messages) => {
-      appendMessages(messages);
-      renderChips();
+      if (isCurrent()) {
+        appendMessages(messages);
+        renderChips();
+      }
     })
     .catch(() => {
-      appendMessages([
-        { role: 'error', text: 'Er ging iets mis bij het starten van Elvie. Probeer de pagina te herladen.' },
-      ]);
+      if (isCurrent()) {
+        appendMessages([
+          { role: 'error', text: 'Er ging iets mis bij het starten van Elvie. Probeer de pagina te herladen.' },
+        ]);
+      }
     })
     .finally(() => {
+      if (!isCurrent()) {
+        return;
+      }
       const hasError = log.querySelector('.elvie-message--error') !== null;
       setBusy(false);
       renderChips();
