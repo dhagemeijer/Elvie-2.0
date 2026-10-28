@@ -366,6 +366,16 @@ export class ConversationEngine {
     }
 
     const { decision } = processEmployeeMessage(context, text);
+    // BUILD 04B par. 15.1/15.3: the engine-owned ticket category is material
+    // state and is fixed WITHIN the turn that derives it, so the central
+    // turn commit compares like with like and a category change is never
+    // attributed to a later, materially unchanged turn.
+    if (decision.kind === 'security_sensitive_route') {
+      context.intakeType = 'security';
+    } else if (decision.kind === 'sufficient_understanding') {
+      context.intakeType =
+        (context.intentClassification?.value ?? context.intent) === 'request' ? 'request' : 'incident';
+    }
     await this.enqueueRoutingUpdate(text);
     // Safe diagnostics only: decision category, never raw input content.
     this.operational('info', 'employee message processed', 'success', decision.kind);
@@ -837,9 +847,14 @@ export class ConversationEngine {
     }
 
     if (submission.status === 'failed') {
-      // S-08/P-11: a retry needs a fresh validated preview and a NEW
-      // explicit confirmation; this turn only shows the fresh preview.
+      // S-08/S-18/P-11 (par. 15.5): a new attempt requires a fresh explicit
+      // confirmation of a current validated preview; an unchanged draft may
+      // be retried after that explicit reconfirmation. A stale or unresolved
+      // snapshot can still never submit: it is re-rendered instead.
       if (isSubmissionConfirmation(answer)) {
+        if (this.snapshotIsCurrent()) {
+          return this.submitTicket();
+        }
         return this.renderPreview();
       }
       return [{ role: 'elvie', text: this.texts.submissionFailed }];
