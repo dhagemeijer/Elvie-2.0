@@ -116,7 +116,10 @@ describe('BUILD 05.2 — security-first recognition (finding B05-T05)', () => {
     expect(preview).toContain('Categorie: beveiligingsmelding');
     const submitted = text(await engine.handleEmployeeInput('bevestigen'));
     expect(submitted).toMatch(/SIM-security-\d{4}/);
-    expect(submitted).toContain('geen echte TOPdesk-melding');
+    // The simulation text uses accents ("géén echte TOPdesk-melding");
+    // assert accent-insensitively on the stable fragment.
+    expect(submitted).toContain('TOPdesk-melding');
+    expect(submitted).toContain('simulatie');
 
     // H. No secrets are requested, logged or unnecessarily processed.
     expect(reply).not.toMatch(/vul je wachtwoord|je token|verificatiecode|pincode/i);
