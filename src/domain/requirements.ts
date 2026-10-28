@@ -18,6 +18,7 @@ import type { ConversationContext } from './conversation-context';
 import { getFact, hasReliableFact } from './conversation-context';
 import type { FactCategory } from './facts';
 import type { ConversationIntent } from './intent-classification';
+import type { IntakeType } from './conversation-context';
 
 export interface RequirementRuleCondition {
   /** Applicable only for this intent (all intents when omitted). */
@@ -122,7 +123,38 @@ export function calculateMissingFacts(
   context: ConversationContext,
   rules: readonly RequirementRule[],
 ): MissingInformationCalculation {
-  const intent = context.intentClassification?.value ?? context.intent ?? 'unknown';
+  return calculateMissingFactsImpl(
+    context,
+    rules,
+    context.intentClassification?.value ?? context.intent ?? 'unknown',
+    'unknown',
+  );
+}
+
+/**
+ * BUILD 04B §6.1: requirements evaluation from the SINGLE engine-owned
+ * effective ticket category (never the raw ConversationIntent) plus the
+ * functional route. A workplace or connectivity route makes the device a
+ * required answer for incidents, so a route change recomputes the
+ * requirements (I-07/P-05).
+ */
+export function calculateMissingFactsForCategory(
+  context: ConversationContext,
+  rules: readonly RequirementRule[],
+  category: IntakeType,
+  functionalRoute: string,
+): MissingInformationCalculation {
+  const intent: ConversationIntent =
+    category === 'request' ? 'request' : category === 'security' ? 'phishing' : 'incident';
+  return calculateMissingFactsImpl(context, rules, intent, functionalRoute);
+}
+
+function calculateMissingFactsImpl(
+  context: ConversationContext,
+  rules: readonly RequirementRule[],
+  intent: ConversationIntent,
+  functionalRoute: string,
+): MissingInformationCalculation {
   const subjectValues = [getFact(context, 'serviceOrApplication')?.value, getFact(context, 'device')?.value].filter(
     (value): value is string => value !== undefined,
   );
@@ -141,6 +173,11 @@ export function calculateMissingFacts(
   }
   for (const category of suppressed) {
     required.delete(category);
+  }
+  // BUILD 04B §6.1: route-conditional requirement (a required answer: an
+  // accepted explicit unknown completes it).
+  if (intent === 'incident' && (functionalRoute === 'workplace' || functionalRoute === 'connectivity')) {
+    required.add('device');
   }
   const orderedRequired = FACT_CATEGORY_PRIORITY.filter((category) => required.has(category));
   const missing = orderedRequired.filter((category) => !hasReliableFact(context, category));
