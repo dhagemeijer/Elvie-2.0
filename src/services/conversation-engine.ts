@@ -1,17 +1,13 @@
-import type { ConversationContext, ConversationFactValue, ConversationStateName } from '../domain/conversation-context';
-import {
-  createConversationContext,
-  getAnswer,
-  getFact,
-  hasReliableFact,
-  recordAnswer,
-} from '../domain/conversation-context';
+import type { ConversationContext, ConversationStateName, IntakeType } from '../domain/conversation-context';
+import { classifyAnswerOutcome, clearAnswerOutcome, recordAnswerOutcome } from '../domain/answer-outcome';
+import { UNKNOWN_LABEL, validateIntake, type IntakeValidationResult } from '../domain/intake-policy';
+import { buildDraftFromContent, buildTicketContent, type TicketContent } from '../domain/ticket-content';
+import { createConversationContext, hasReliableFact, recordAnswer } from '../domain/conversation-context';
 import type { FactCategory } from '../domain/facts';
 import { processEmployeeMessage } from '../domain/conversation-core';
 import { FACT_QUESTIONS } from '../domain/conversation-decision';
 import { buildKnowledgeQuery } from '../domain/knowledge-request';
 import { gateKnowledgeArticles, rankKnowledgeArticles, type RankedKnowledgeArticle } from '../domain/knowledge-ranking';
-import { calculateMissingFacts, FICTIONAL_REQUIREMENT_RULES } from '../domain/requirements';
 import { materialStateProjection, nextMaterialRevision } from '../domain/material-revision';
 import {
   computeRouting,
@@ -114,6 +110,28 @@ export interface ConversationEngineDeps {
 type ResolutionFeedback = 'opgelost' | 'niet_opgelost' | 'onduidelijk';
 
 /**
+ * BUILD 04C §15.4: internal preview subphases within the existing PREVIEW
+ * lifecycle state (never new top-level states).
+ */
+type PreviewSubphase =
+  | 'awaiting_confirmation'
+  | 'editing'
+  | 'awaiting_correction_answer'
+  | 'revalidating'
+  | 'submission_locked';
+
+/**
+ * BUILD 04C §7.2: immutable, server-owned preview snapshot. Coupled to the
+ * server-owned material revision from Build 04A: any material change bumps
+ * the revision and thereby invalidates the snapshot automatically.
+ */
+interface PreviewSnapshot {
+  readonly content: TicketContent;
+  readonly validation: IntakeValidationResult;
+  readonly revision: number;
+}
+
+/**
  * Deterministic conversation engine.
  *
  * Build 02: the UNDERSTAND phase is powered by the deterministic
@@ -153,6 +171,24 @@ export class ConversationEngine {
   /** Build 04A §15.3 final: serialises complete employee message processing per session. */
   private messageProcessingChain: Promise<unknown> = Promise.resolve();
 
+  /** Build 04C §15.4: internal preview subphase (never a lifecycle state). */
+  private previewSubphase: PreviewSubphase = 'awaiting_confirmation';
+
+  /** Build 04C §7.2: immutable server-owned preview snapshot (or null). */
+  private previewSnapshot: PreviewSnapshot | null = null;
+
+  /** Build 04C §15.5: in-flight submission claim (defense in depth). */
+  private submissionInFlight = false;
+
+  /** Build 04B §6.3: bounded per-field clarification bookkeeping. */
+  private clarifiedFields = new Set<string>();
+
+  /** Build 04C: field of an open correction question (if any). */
+  private pendingCorrectionField: FactCategory | null = null;
+
+  /** Build 04B/04C: latest intake validation result (diagnostics/tests). */
+  private lastValidation: IntakeValidationResult | null = null;
+
   constructor(private readonly deps: ConversationEngineDeps) {
     this.texts = { ...DEFAULT_ENGINE_TEXTS, ...deps.texts };
     this.now = deps.now ?? nowIso;
@@ -182,6 +218,19 @@ export class ConversationEngine {
   }
 
   /**
+   * Build 04C §7.2: current immutable preview snapshot for
+   * diagnostics/tests (null before the first preview).
+   */
+  public get currentPreviewSnapshot(): PreviewSnapshot | null {
+    return this.previewSnapshot;
+  }
+
+  /** Build 04B: latest intake validation result (diagnostics/tests). */
+  public get currentIntakeValidation(): IntakeValidationResult | null {
+    return this.lastValidation;
+  }
+
+  /**
    * Start a conversation. Authenticates first: when identity is not
    * configured, the engine fails closed and never creates a session.
    */
@@ -197,6 +246,12 @@ export class ConversationEngine {
       this.materialSignature = this.materialSignatureAfter(this.context);
       this.routingUpdateChain = Promise.resolve();
       this.messageProcessingChain = Promise.resolve();
+      this.previewSubphase = 'awaiting_confirmation';
+      this.previewSnapshot = null;
+      this.submissionInFlight = false;
+      this.clarifiedFields.clear();
+      this.pendingCorrectionField = null;
+      this.lastValidation = null;
       this.operational('info', 'conversation started', 'success');
       return [
         {
@@ -575,17 +630,15 @@ export class ConversationEngine {
     context.knowledgePhase = undefined;
     context.currentKnowledgeArticleId = undefined;
     this.rankedArticles = [];
-    const missing = calculateMissingFacts(context, FICTIONAL_REQUIREMENT_RULES).missing;
-    const category = missing[0];
-    if (category !== undefined) {
-      context.pendingIntakeCategory = category;
-      return [{ role: 'elvie', text: intro }, { role: 'elvie', text: FACT_QUESTIONS[category] }];
+    const question = this.nextIntakeQuestion();
+    if (question !== undefined) {
+      return [{ role: 'elvie', text: intro }, { role: 'elvie', text: question.text }];
     }
-    // Everything required is already reliably known: complete the context
-    // and show the preview without asking anything twice.
+    // Everything required is already reliably validated: complete the
+    // context and show the preview without asking anything twice.
     applyTransition(context, 'COMPLETE_CONTEXT');
     applyTransition(context, 'PREVIEW');
-    return [{ role: 'elvie', text: intro }, ...this.previewMessages()];
+    return [{ role: 'elvie', text: intro }, ...this.renderPreview()];
   }
 
   // --- Generic intake -------------------------------------------------------
@@ -608,11 +661,19 @@ export class ConversationEngine {
     const pending = context.pendingIntakeCategory;
     processEmployeeMessage(context, text);
     context.pendingIntakeCategory = undefined;
-    if (pending !== undefined && !hasReliableFact(context, pending)) {
-      // The employee answered, but the deterministic core could not derive
-      // a structured fact. Retain the answer for this category so the
-      // question is never asked again (never knowingly ask twice).
-      recordAnswer(context, pending, text.trim());
+    if (pending !== undefined) {
+      if (hasReliableFact(context, pending)) {
+        // I-08: a structured fact derived from this answer supersedes any
+        // earlier typed outcome for the same field.
+        clearAnswerOutcome(context, pending);
+      } else {
+        // BUILD 04B §15.2: the deterministic core could not derive a
+        // structured fact. Classify the answer into a typed outcome and
+        // retain that outcome: raw free text is never automatically
+        // treated as validated, an accepted explicit unknown completes a
+        // required-answer field, an invalid answer gets a bounded retry.
+        recordAnswerOutcome(context, pending, classifyAnswerOutcome(text, context.currentTurn));
+      }
     }
     // §15.3: the turn commit runs AFTER the validated answer is retained,
     // so the material revision rises in the turn that produced it.
@@ -620,160 +681,342 @@ export class ConversationEngine {
     return this.advanceIntake();
   }
 
-  /** Ask the next missing category or complete the context into the preview. */
+  /** Ask the next unresolved required field or complete into the preview. */
   private advanceIntake(): readonly ChatMessage[] {
     const context = this.requireContext();
-    const missing = calculateMissingFacts(context, FICTIONAL_REQUIREMENT_RULES).missing;
-    const category = missing[0];
-    if (category !== undefined) {
-      context.pendingIntakeCategory = category;
-      return [{ role: 'elvie', text: FACT_QUESTIONS[category] }];
+    const question = this.nextIntakeQuestion();
+    if (question !== undefined) {
+      return [{ role: 'elvie', text: question.text }];
     }
     applyTransition(context, 'COMPLETE_CONTEXT');
     applyTransition(context, 'PREVIEW');
-    return this.previewMessages();
+    return this.renderPreview();
+  }
+
+  /**
+   * BUILD 04B §6.3/§15.2: next intake question, if any. Validation runs
+   * from the SINGLE engine-owned effective ticket category plus the
+   * functional route (§6.1). A missing required field is asked; a field
+   * with an accepted explicit unknown is never asked again; an invalid
+   * answer gets exactly one bounded clarification (I-03/I-05).
+   */
+  private nextIntakeQuestion(): { field: FactCategory; text: string } | undefined {
+    const context = this.requireContext();
+    const validation = validateIntake(context, this.intakeCategory(), this.functionalRoute());
+    this.lastValidation = validation;
+    const missingField = validation.fields.find((field) => field.status === 'missing');
+    if (missingField !== undefined) {
+      context.pendingIntakeCategory = missingField.field;
+      return { field: missingField.field, text: FACT_QUESTIONS[missingField.field] };
+    }
+    const retryable = validation.fields.find(
+      (field) => field.status === 'invalid' && !this.clarifiedFields.has(field.field),
+    );
+    if (retryable !== undefined) {
+      this.clarifiedFields.add(retryable.field);
+      context.pendingIntakeCategory = retryable.field;
+      return {
+        field: retryable.field,
+        text: 'Ik begrijp dat antwoord niet helemaal. ' + FACT_QUESTIONS[retryable.field],
+      };
+    }
+    return undefined;
+  }
+
+  /** Build 04B §6.1: the single engine-owned effective ticket category. */
+  private intakeCategory(): IntakeType {
+    const context = this.requireContext();
+    return context.intakeType ?? 'incident';
+  }
+
+  /** Build 04A/04C: current functional route ('unknown' while undetermined). */
+  private functionalRoute(): string {
+    const routing = this.routing;
+    return routing !== null && routing.status === 'determined' ? routing.route : 'unknown';
   }
 
   // --- Preview and submission -----------------------------------------------
 
   /**
-   * Employee-facing preview; explicitly and unambiguously marked as a
-   * simulation (BUILD_03.md v5.2 par. 9.2).
+   * BUILD 04C §7.2: build the canonical validated ticket content and pin
+   * the immutable, server-owned preview snapshot, coupled to the current
+   * material revision. Any material change bumps the revision and thereby
+   * invalidates this snapshot automatically (P-03).
+   */
+  private renderPreview(): readonly ChatMessage[] {
+    const context = this.requireContext();
+    const validation = validateIntake(context, this.intakeCategory(), this.functionalRoute());
+    this.lastValidation = validation;
+    const content = buildTicketContent(context, this.intakeCategory(), this.functionalRoute(), validation);
+    this.previewSnapshot = { content, validation, revision: this.materialRevision };
+    this.previewSubphase = 'awaiting_confirmation';
+    return this.previewMessages();
+  }
+
+  /**
+   * Employee-facing preview, rendered strictly FROM the immutable
+   * snapshot (BUILD_04 §7.2.3); explicitly and unambiguously marked as a
+   * simulation (P-10). Required fields with an accepted explicit unknown
+   * are shown as such (I-15) and derived values are never presented as
+   * explicit statements (P-02).
    */
   private previewMessages(): readonly ChatMessage[] {
-    const context = this.requireContext();
+    const snapshot = this.previewSnapshot;
+    if (snapshot === null) {
+      return [];
+    }
     const lines: string[] = [];
-    const subject = contextValue(context, 'serviceOrApplication');
-    const device = contextValue(context, 'device');
-    const symptom = contextValue(context, 'symptom');
-    const requestedResource = contextValue(context, 'requestedResource');
-    const location = contextValue(context, 'location');
-    const indicators = contextValue(context, 'securityIndicators');
-    if (subject !== undefined) {
-      lines.push('Onderwerp: ' + subject);
+    lines.push('Categorie: ' + categoryLabel(snapshot.content.category));
+    lines.push(
+      snapshot.content.route === 'unknown'
+        ? 'Functionele route: onbekend (intern)'
+        : 'Functionele route: ' + snapshot.content.route + ' (intern, geen TOPdesk-toewijzing)',
+    );
+    for (const [key, label] of PREVIEW_FIELD_LABELS) {
+      const value = snapshot.content.context[key];
+      if (value !== undefined) {
+        lines.push(label + ': ' + value + (snapshot.content.provenance[key] === 'afgeleid' ? ' (afgeleid)' : ''));
+      }
     }
-    if (device !== undefined) {
-      lines.push('Apparaat: ' + device);
+    for (const field of snapshot.content.unknownFields) {
+      const label = FIELD_LABELS[field];
+      if (label !== undefined) {
+        lines.push(label + ': ' + UNKNOWN_LABEL);
+      }
     }
-    if (symptom !== undefined) {
-      lines.push('Symptoom: ' + symptom);
-    }
-    if (requestedResource !== undefined) {
-      lines.push('Aanvraag: ' + requestedResource);
-    }
-    if (location !== undefined) {
-      lines.push('Locatie: ' + location);
-    }
-    if (indicators !== undefined) {
-      lines.push('Beveiligingsindicatoren: ' + indicators);
-    }
-    const intro = this.texts.previewIntro.replace('melding', intakeLabel(context));
+    const intro = this.texts.previewIntro.replace('melding', categoryLabel(snapshot.content.category));
     const messages: ChatMessage[] = [];
     if (lines.length > 0) {
       messages.push({ role: 'elvie', text: lines.join('\n') });
     }
     messages.push({ role: 'elvie', text: intro });
+    if (
+      snapshot.validation.outcome === 'needs_information' ||
+      snapshot.validation.outcome === 'clarification_required'
+    ) {
+      messages.push({
+        role: 'elvie',
+        text: 'Belangrijk: deze melding is nog niet volledig gevalideerd. Bevestigen of versturen is daarom nog niet mogelijk; vul ontbrekende informatie aan via een beschrijving van wat je wilt aanpassen.',
+      });
+    }
     return messages;
   }
 
   /**
-   * PREVIEW. The submission is sent only after the employee explicitly
-   * confirms. When the outcome is uncertain (inconclusive), new
-   * 'versturen'/'bevestigen' input NEVER triggers a second submit:
-   * recovery happens exclusively via a status check with the same
-   * submission key (BUILD_03.md v5.2 par. 11/12).
+   * PREVIEW (BUILD_04C §7.2/§15.4/§16.3). Submission happens only after an
+   * exact confirmation command in the awaiting_confirmation subphase with
+   * a current, validated snapshot. Corrections edit the underlying data
+   * within the existing PREVIEW lifecycle state; a correction answer (and
+   * 'ja' during editing or a correction answer) is never a submission
+   * (F-10/P-09). An uncertain (inconclusive) outcome recovers exclusively
+   * via a status check with the same submission key; a failed attempt
+   * requires a fresh validated preview and a NEW explicit confirmation.
    */
   private async handlePreview(text: string): Promise<readonly ChatMessage[]> {
     const context = this.requireContext();
     const answer = text.trim().toLowerCase();
     const submission = context.submission;
 
+    // §15.5: an in-flight submission claim can never produce a second
+    // logical attempt, submission key or submit() call.
+    if (this.submissionInFlight) {
+      return [{ role: 'elvie', text: this.texts.submissionInconclusive }];
+    }
+
     if (submission.status === 'inconclusive') {
       if (isSubmissionConfirmation(answer) || answer.includes('status')) {
         return this.checkSubmissionStatus();
       }
+      // F-12: no correction mutates a claimed draft while uncertain.
       return [{ role: 'elvie', text: this.texts.submissionInconclusive }];
     }
 
     if (submission.status === 'failed') {
-      // A new attempt requires an explicit new confirmation; a new turn
-      // then also produces a new submission key (par. 11).
+      // S-08/P-11: a retry needs a fresh validated preview and a NEW
+      // explicit confirmation; this turn only shows the fresh preview.
       if (isSubmissionConfirmation(answer)) {
-        return this.submitTicket();
+        return this.renderPreview();
       }
       return [{ role: 'elvie', text: this.texts.submissionFailed }];
     }
 
-    if (!isSubmissionConfirmation(answer)) {
-      return [{ role: 'elvie', text: this.texts.previewConfirmPrompt }];
+    // F-10/P-09: while a correction question is open, every input
+    // (including exact confirmation words) is an answer to that question,
+    // never a submission.
+    if (this.previewSubphase === 'awaiting_correction_answer') {
+      return this.handleCorrectionAnswer(text);
     }
-    return this.submitTicket();
+
+    if (isSubmissionConfirmation(answer)) {
+      if (this.previewSubphase === 'awaiting_confirmation' && this.snapshotIsCurrent()) {
+        return this.submitTicket();
+      }
+      // P-07/P-08/I-06: a stale snapshot or unresolved validation can
+      // never submit; the fresh validated preview is shown instead.
+      return this.renderPreview();
+    }
+
+    // P-12: any other input corrects the underlying data.
+    return this.handlePreviewCorrection(text);
   }
 
   /**
-   * Deferred SUBMIT transition: the ticket port is called BEFORE any
-   * lifecycle transition (par. 12.1). Only a contract-valid submitted
-   * result reaches CONFIRM; failed, unknown, invalid and exception
-   * outcomes all keep the conversation in PREVIEW (par. 12.2).
+   * §7.2.4: the snapshot is current when its revision matches the
+   * server-owned material revision and its validation admits a preview
+   * confirmation.
+   */
+  private snapshotIsCurrent(): boolean {
+    const snapshot = this.previewSnapshot;
+    if (snapshot === null || snapshot.revision !== this.materialRevision) {
+      return false;
+    }
+    return (
+      snapshot.validation.outcome === 'ready_for_preview' ||
+      snapshot.validation.outcome === 'security_route_required'
+    );
+  }
+
+  /**
+   * P-12: process a correction of the underlying data inside the existing
+   * PREVIEW state. The turn commit runs after the correction, so a
+   * material correction bumps the revision exactly once and thereby
+   * invalidates the previous snapshot automatically (P-03/P-05).
+   */
+  private async handlePreviewCorrection(text: string): Promise<readonly ChatMessage[]> {
+    const context = this.requireContext();
+    this.previewSubphase = 'editing';
+    this.pendingCorrectionField = null;
+    processEmployeeMessage(context, text);
+    await this.enqueueRoutingUpdate(text);
+    this.operational('info', 'preview correction processed', 'success');
+    return this.completeCorrection();
+  }
+
+  /** F-10: the answer to an open correction question, typed like intake. */
+  private async handleCorrectionAnswer(text: string): Promise<readonly ChatMessage[]> {
+    const context = this.requireContext();
+    const pending = this.pendingCorrectionField;
+    this.pendingCorrectionField = null;
+    processEmployeeMessage(context, text);
+    if (pending !== null && !hasReliableFact(context, pending)) {
+      recordAnswerOutcome(context, pending, classifyAnswerOutcome(text, context.currentTurn));
+    } else if (pending !== null) {
+      clearAnswerOutcome(context, pending);
+    }
+    await this.enqueueRoutingUpdate(text);
+    return this.completeCorrection();
+  }
+
+  /**
+   * P-04: after a correction, revalidate and re-route: a still-unresolved
+   * required field gets exactly one bounded follow-up question within the
+   * existing PREVIEW state; otherwise the freshly validated preview is
+   * shown again and awaits a new explicit confirmation.
+   */
+  private completeCorrection(): readonly ChatMessage[] {
+    const context = this.requireContext();
+    const next = this.nextIntakeQuestion();
+    context.pendingIntakeCategory = undefined;
+    if (next !== undefined) {
+      this.previewSubphase = 'awaiting_correction_answer';
+      this.pendingCorrectionField = next.field;
+      return [{ role: 'elvie', text: 'Bedankt. Nog één aanvulling:' }, { role: 'elvie', text: next.text }];
+    }
+    this.previewSubphase = 'revalidating';
+    return [
+      { role: 'elvie', text: 'Ik heb je aanpassing verwerkt. Dit is de bijgewerkte melding.' },
+      ...this.renderPreview(),
+    ];
+  }
+
+  /**
+   * Deferred SUBMIT transition (par. 12.1) with BUILD_04C §7.2.4/§15.5:
+   * server-side revalidation immediately before the port call — a stale
+   * snapshot, unresolved validation or drifted content never submits; the
+   * draft submitted is EXACTLY the confirmed snapshot content (P-13). The
+   * logical attempt is claimed atomically BEFORE awaiting the port, so a
+   * concurrent confirmation can never create a second attempt or key.
+   * Only a contract-valid submitted result reaches CONFIRM; failed,
+   * unknown, invalid and exception outcomes all keep the conversation in
+   * PREVIEW (par. 12.2).
    */
   private async submitTicket(): Promise<readonly ChatMessage[]> {
     const context = this.requireContext();
     const submission = context.submission;
-    submission.attempt += 1;
-    const key = makeSubmissionKey(context.sessionId, submission.attempt);
-    submission.key = key.value;
-    submission.status = 'confirmed';
+    const snapshot = this.previewSnapshot;
 
-    const draft: TicketDraft = { ...buildTicketDraft(context), submissionKey: key };
-    let result: TicketSubmissionResult;
+    // §7.2.4/§15.3: a superseded (stale) snapshot can never submit.
+    if (snapshot === null || snapshot.revision !== this.materialRevision) {
+      return this.renderPreview();
+    }
+    const freshValidation = validateIntake(context, this.intakeCategory(), this.functionalRoute());
+    this.lastValidation = freshValidation;
+    if (freshValidation.outcome === 'needs_information' || freshValidation.outcome === 'clarification_required') {
+      // I-06/P-08: essential information missing or contradictory: never
+      // submit, never a false completion.
+      this.previewSnapshot = { content: snapshot.content, validation: freshValidation, revision: snapshot.revision };
+      this.previewSubphase = 'awaiting_confirmation';
+      return this.previewMessages();
+    }
+    const freshContent = buildTicketContent(context, this.intakeCategory(), this.functionalRoute(), freshValidation);
+    if (JSON.stringify(freshContent) !== JSON.stringify(snapshot.content)) {
+      // P-11/P-13: any drift between the confirmed snapshot and the
+      // current validated content re-renders a fresh preview instead.
+      this.previewSnapshot = { content: freshContent, validation: freshValidation, revision: this.materialRevision };
+      this.previewSubphase = 'awaiting_confirmation';
+      return this.previewMessages();
+    }
+
+    this.submissionInFlight = true;
     try {
-      result = await this.deps.ticket.submit(draft);
-    } catch (error) {
-      // Timeout / network interruption / unknown transport failure:
-      // the outcome is inconclusive; never resubmit automatically.
+      const key = makeSubmissionKey(context.sessionId, submission.attempt + 1);
+      submission.key = key.value;
+      submission.status = 'confirmed';
+      const draft: TicketDraft = buildDraftFromContent(snapshot.content, key);
+      let result: TicketSubmissionResult;
+      try {
+        result = await this.deps.ticket.submit(draft);
+      } catch (error) {
+        submission.attempt += 1;
+        submission.status = 'inconclusive';
+        this.auditSubmission('inconclusive', 'transport');
+        this.operational('error', 'ticket submission inconclusive', 'failure', 'transport');
+        void error;
+        return [{ role: 'elvie', text: this.texts.submissionInconclusive }];
+      }
+      if (!isContractValidSubmission(result, key)) {
+        submission.attempt += 1;
+        submission.status = 'inconclusive';
+        this.auditSubmission('inconclusive', 'submission_contract_violation');
+        this.operational('error', 'ticket submission contract violation', 'failure', 'submission_contract_violation');
+        return [{ role: 'elvie', text: this.texts.submissionInconclusive }];
+      }
+      if (result.kind === 'submitted') {
+        submission.attempt += 1;
+        submission.status = 'submitted';
+        submission.reference = result.reference;
+        applyTransition(context, 'SUBMIT');
+        applyTransition(context, 'CONFIRM');
+        this.auditSubmission('success', undefined, result.reference);
+        this.operational('info', 'ticket submitted (simulated)', 'success');
+        return [{ role: 'elvie', text: this.texts.submissionSuccess.replace('REFERENTIE', result.reference) }];
+      }
+      if (result.kind === 'failed') {
+        submission.attempt += 1;
+        submission.status = 'failed';
+        this.auditSubmission('failed', result.reasonCategory);
+        this.operational('error', 'ticket submission failed', 'failure', result.reasonCategory);
+        return [{ role: 'elvie', text: this.texts.submissionFailed }];
+      }
+      // result.kind === 'unknown' (valid): uncertain outcome, stays in PREVIEW.
+      submission.attempt += 1;
       submission.status = 'inconclusive';
-      this.auditSubmission('inconclusive', 'transport');
-      this.operational('error', 'ticket submission inconclusive', 'failure', 'transport');
-      void error;
+      this.auditSubmission('inconclusive', result.reasonCategory);
+      this.operational('error', 'ticket submission inconclusive', 'failure', result.reasonCategory);
       return [{ role: 'elvie', text: this.texts.submissionInconclusive }];
+    } finally {
+      this.submissionInFlight = false;
     }
-
-    if (!isContractValidSubmission(result, key)) {
-      // Invalid or contradictory response: NEVER reaches CONFIRM; handled
-      // fail-closed as uncertain (par. 10.1).
-      submission.status = 'inconclusive';
-      this.auditSubmission('inconclusive', 'submission_contract_violation');
-      this.operational(
-        'error',
-        'ticket submission contract violation',
-        'failure',
-        'submission_contract_violation',
-      );
-      return [{ role: 'elvie', text: this.texts.submissionInconclusive }];
-    }
-
-    if (result.kind === 'submitted') {
-      submission.status = 'submitted';
-      submission.reference = result.reference;
-      applyTransition(context, 'SUBMIT');
-      applyTransition(context, 'CONFIRM');
-      this.auditSubmission('success', undefined, result.reference);
-      this.operational('info', 'ticket submitted (simulated)', 'success');
-      return [{ role: 'elvie', text: this.texts.submissionSuccess.replace('REFERENTIE', result.reference) }];
-    }
-
-    if (result.kind === 'failed') {
-      submission.status = 'failed';
-      this.auditSubmission('failed', result.reasonCategory);
-      this.operational('error', 'ticket submission failed', 'failure', result.reasonCategory);
-      return [{ role: 'elvie', text: this.texts.submissionFailed }];
-    }
-
-    // result.kind === 'unknown' (valid): uncertain outcome, stays in PREVIEW.
-    submission.status = 'inconclusive';
-    this.auditSubmission('inconclusive', result.reasonCategory);
-    this.operational('error', 'ticket submission inconclusive', 'failure', result.reasonCategory);
-    return [{ role: 'elvie', text: this.texts.submissionInconclusive }];
   }
 
   /**
@@ -1021,8 +1264,30 @@ function isSubmissionConfirmation(answer: string): boolean {
   );
 }
 
-function intakeLabel(context: ConversationContext): string {
-  switch (context.intakeType) {
+/** Build 04C §7.2.3: field display labels (preview and unknown lines). */
+const FIELD_LABELS: Readonly<Record<string, string>> = {
+  symptom: 'Symptoom',
+  serviceOrApplication: 'Onderwerp',
+  device: 'Apparaat',
+  requestedResource: 'Aanvraag',
+  location: 'Locatie',
+  securityIndicators: 'Beveiligingsindicatoren',
+  startTime: 'Begintijd',
+  impact: 'Impact',
+};
+
+/** Preview render order for the validated content fields. */
+const PREVIEW_FIELD_LABELS: readonly (readonly [string, string])[] = [
+  ['onderwerp', 'Onderwerp'],
+  ['apparaat', 'Apparaat'],
+  ['symptoom', 'Symptoom'],
+  ['aanvraag', 'Aanvraag'],
+  ['locatie', 'Locatie'],
+  ['beveiligingsindicatoren', 'Beveiligingsindicatoren'],
+];
+
+function categoryLabel(category: IntakeType): string {
+  switch (category) {
     case 'request':
       return 'aanvraag';
     case 'security':
@@ -1030,71 +1295,6 @@ function intakeLabel(context: ConversationContext): string {
     default:
       return 'melding';
   }
-}
-
-/** Structured context value for previews and drafts (fact first, answer second). */
-function contextValue(context: ConversationContext, category: FactCategory): string | undefined {
-  const fact = getFact(context, category)?.value;
-  if (fact !== undefined) {
-    return fact;
-  }
-  const answer: ConversationFactValue | undefined = getAnswer(context, category);
-  if (answer === undefined) {
-    return undefined;
-  }
-  if (typeof answer === 'string') {
-    return answer;
-  }
-  if (typeof answer === 'number' || typeof answer === 'boolean') {
-    return String(answer);
-  }
-  return answer.join(', ');
-}
-
-function buildTicketDraft(context: ConversationContext): TicketDraft {
-  const category = context.intakeType ?? 'incident';
-  const subject = contextValue(context, 'serviceOrApplication') ?? contextValue(context, 'device');
-  const requestedResource = contextValue(context, 'requestedResource');
-  const symptom = contextValue(context, 'symptom');
-  const location = contextValue(context, 'location');
-  const indicators = contextValue(context, 'securityIndicators');
-
-  const summaryParts: string[] = [category];
-  if (subject !== undefined) {
-    summaryParts.push(subject);
-  } else if (requestedResource !== undefined) {
-    summaryParts.push(requestedResource);
-  }
-  if (symptom !== undefined) {
-    summaryParts.push(symptom);
-  }
-
-  const ticketContext: Record<string, string> = {
-    intent: context.intentClassification?.value ?? context.intent ?? 'unknown',
-  };
-  if (subject !== undefined) {
-    ticketContext['onderwerp'] = subject;
-  }
-  if (requestedResource !== undefined) {
-    ticketContext['aanvraag'] = requestedResource;
-  }
-  if (symptom !== undefined) {
-    ticketContext['symptoom'] = symptom;
-  }
-  if (location !== undefined) {
-    ticketContext['locatie'] = location;
-  }
-  if (indicators !== undefined) {
-    ticketContext['beveiligingsindicatoren'] = indicators;
-  }
-
-  return {
-    category,
-    summary: summaryParts.join(' — '),
-    description: 'Vastgelegd door Elvie op basis van bekende gespreksfeiten (simulatie).',
-    context: ticketContext,
-    submissionKey: { value: '' },
-  };
 }
 
 /**
