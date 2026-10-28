@@ -70,13 +70,19 @@ function draft(category: TicketDraft['category'], submissionKey: SubmissionKey, 
   };
 }
 
+/** Scripted submission outcome without the key (echoed from the draft). */
+type ScriptedSubmissionResult =
+  | { readonly kind: 'failed'; readonly reasonCategory: 'rejected' | 'invalid_draft' }
+  | { readonly kind: 'submitted'; readonly reference: string }
+  | { readonly kind: 'unknown'; readonly reasonCategory: 'timeout' | 'transport' };
+
 /** Scripted port per §16.4: records every call, key and an immutable draft copy. */
 class ScriptedTicketPort implements TicketPort {
   calls = 0;
   readonly keys: string[] = [];
   readonly drafts: TicketDraft[] = [];
 
-  constructor(private readonly script: readonly Omit<TicketSubmissionResult, 'submissionKey'>[]) {}
+  constructor(private readonly script: readonly ScriptedSubmissionResult[]) {}
 
   async submit(d: TicketDraft): Promise<TicketSubmissionResult> {
     this.calls += 1;
@@ -86,7 +92,7 @@ class ScriptedTicketPort implements TicketPort {
     if (result === undefined) {
       throw new Error('No scripted result for submit call ' + String(this.calls));
     }
-    return { ...result, submissionKey: d.submissionKey } as TicketSubmissionResult;
+    return { ...result, submissionKey: d.submissionKey };
   }
 
   async getStatus(submissionKey: SubmissionKey): Promise<TicketStatusResult> {

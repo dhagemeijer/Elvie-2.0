@@ -78,7 +78,10 @@ export interface MockTicketProviderOptions {
 function canonicalContentSignature(draft: TicketDraft): string {
   const context: Record<string, string> = {};
   for (const key of Object.keys(draft.context).sort()) {
-    context[key] = draft.context[key];
+    const value = draft.context[key];
+    if (value !== undefined) {
+      context[key] = value;
+    }
   }
   return JSON.stringify({
     category: draft.category,
