@@ -329,7 +329,7 @@ describe('BUILD 05 — submission experience', () => {
     expect(send?.disabled).toBe(true);
     expect(chips(root).every((c) => c.disabled)).toBe(true);
     expect(root.querySelector('.elvie-log')?.getAttribute('aria-busy')).toBe('true');
-    expect(root.querySelector('.elvie-status')?.hidden).toBe(false);
+    expect((root.querySelector('.elvie-status') as HTMLElement | null)?.hidden).toBe(false);
     await flush();
 
     // A rapid second confirmation is ignored by the busy UI guard.
