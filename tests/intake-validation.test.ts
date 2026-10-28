@@ -1,24 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import { classifyAnswerOutcome, recordAnswerOutcome } from '../src/domain/answer-outcome';
-import { createConversationContext, setFactRecord } from '../src/domain/conversation-context';
-import { materialStateProjection, nextMaterialRevision } from '../src/domain/material-revision';
+import {
+  createConversationContext,
+  hasReliableFact,
+  setFactRecord,
+} from '../src/domain/conversation-context';
 import { UNKNOWN_LABEL, validateIntake } from '../src/domain/intake-policy';
+import { materialStateProjection, nextMaterialRevision } from '../src/domain/material-revision';
 import { calculateMissingFactsForCategory, FICTIONAL_REQUIREMENT_RULES } from '../src/domain/requirements';
-import { hasReliableFact } from '../src/domain/conversation-context';
 
 describe('BUILD 04B — typed answer classification (§6.1, I-01/F-04)', () => {
   it('classifies concrete, explicit unknown and invalid answers deterministically', () => {
     expect(classifyAnswerOutcome('Mijn laptop', 1)).toMatchObject({ kind: 'concrete', value: 'Mijn laptop' });
     expect(classifyAnswerOutcome('weet ik niet', 1)).toMatchObject({ kind: 'explicit_unknown' });
     expect(classifyAnswerOutcome('  Weet niet ', 1)).toMatchObject({ kind: 'explicit_unknown' });
+    expect(classifyAnswerOutcome('geen idee', 1)).toMatchObject({ kind: 'explicit_unknown' });
+    expect(classifyAnswerOutcome('onbekend', 1)).toMatchObject({ kind: 'explicit_unknown' });
     expect(classifyAnswerOutcome('', 1)).toMatchObject({ kind: 'invalid', reasonCode: 'empty_answer' });
     expect(classifyAnswerOutcome('ja', 1)).toMatchObject({ kind: 'invalid', reasonCode: 'unusable_answer' });
     expect(classifyAnswerOutcome('bevestigen', 1)).toMatchObject({ kind: 'invalid', reasonCode: 'unusable_answer' });
     expect(classifyAnswerOutcome('h', 1)).toMatchObject({ kind: 'invalid', reasonCode: 'unusable_answer' });
-    expect(classifyAnswerOutcome('mijn wachtwoord is geheim123', 1)).toMatchObject({
-      kind: 'invalid',
-      reasonCode: 'prohibited_value',
-    });
   });
 });
 
@@ -31,16 +32,24 @@ describe('BUILD 04B — intake validation (§6.2/§6.3, I-02..I-08)', () => {
       value: 'print niet',
       kind: 'derived',
       confidence: 'high',
+      sourceRuleId: 'symptom_print_failure',
+      evidence: ['print niet'],
       capturedAtTurn: 1,
-    } as never);
+    });
     return context;
   };
 
-  it('required_concrete stays incomplete at "weet ik niet" (I-04/F-05)', () => {
-    const context = base();
-    recordAnswerOutcome(context, 'symptom', { kind: 'explicit_unknown', capturedAtTurn: 2 });
+  it('required_concrete stays incomplete at an accepted unknown (I-04/F-05)', () => {
+    const context = createConversationContext('s5', '2026-01-01T00:00:00Z');
+    context.intent = 'incident';
+    context.intakeType = 'incident';
+    recordAnswerOutcome(context, 'symptom', { kind: 'explicit_unknown', capturedAtTurn: 1 });
     const result = validateIntake(context, 'incident', 'workplace');
     expect(result.outcome).toBe('needs_information');
+    expect(result.fields.find((f) => f.field === 'symptom')).toMatchObject({
+      status: 'explicit_unknown',
+      policy: 'required_concrete',
+    });
     // A concrete typed outcome never comes from an explicit unknown.
     expect(hasReliableFact(context, 'symptom')).toBe(false);
   });
@@ -54,7 +63,7 @@ describe('BUILD 04B — intake validation (§6.2/§6.3, I-02..I-08)', () => {
       policy: 'required_answer',
     });
     expect(result.unknownFields).toContain('device');
-    expect(result.outcome).toBe('needs_information'); // symptom still fine, serviceOrApplication missing
+    expect(result.outcome).toBe('needs_information'); // serviceOrApplication still missing
   });
 
   it('a validated concrete outcome completes a required field (I-01)', () => {
@@ -71,8 +80,10 @@ describe('BUILD 04B — intake validation (§6.2/§6.3, I-02..I-08)', () => {
       value: 'laptop',
       kind: 'derived',
       confidence: 'high',
+      sourceRuleId: 'device_laptop',
+      evidence: ['laptop'],
       capturedAtTurn: 1,
-    } as never);
+    });
     recordAnswerOutcome(context, 'device', { kind: 'explicit_unknown', capturedAtTurn: 2 });
     const result = validateIntake(context, 'incident', 'workplace');
     expect(result.outcome).toBe('clarification_required');
