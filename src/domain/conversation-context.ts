@@ -1,4 +1,5 @@
 import type { FactCategory, FactRecord } from './facts';
+import type { AnswerOutcome } from './answer-outcome';
 import type { ConversationIntent, IntentClassification } from './intent-classification';
 
 /**
@@ -92,6 +93,12 @@ export interface ConversationContext {
   facts: Partial<Record<FactCategory, FactRecord>>;
   /** Answers already supplied, keyed by logical question name. */
   readonly answers: Readonly<Record<string, ConversationFactValue>>;
+  /**
+   * BUILD 04B §15.2: typed answer outcomes (validated concrete, accepted
+   * explicit unknown, invalid) keyed by logical question name. Raw free
+   * text is never automatically treated as validated.
+   */
+  readonly answerOutcomes: Readonly<Record<string, AnswerOutcome>>;
   /** Build 03: internal knowledge/resolution substatus. */
   knowledgePhase?: KnowledgePhase;
   /** Build 03: distinct article ids offered in the current resolution series. */
@@ -117,6 +124,7 @@ export function createConversationContext(sessionId: string, startedAt: string):
     intent: undefined,
     facts: {},
     answers: {},
+    answerOutcomes: {},
     knowledgePhase: undefined,
     knowledgeOfferedArticleIds: [],
     currentKnowledgeArticleId: undefined,
@@ -168,5 +176,10 @@ export function setFactRecord(context: ConversationContext, category: FactCatego
  * to enforce NEVER KNOWINGLY ASK TWICE.
  */
 export function hasReliableFact(context: ConversationContext, category: FactCategory): boolean {
-  return getFact(context, category) !== undefined || hasAnswer(context, category);
+  if (getFact(context, category) !== undefined || hasAnswer(context, category)) {
+    return true;
+  }
+  // BUILD 04B §15.2: a validated concrete typed outcome counts as known; an
+  // accepted explicit unknown or an invalid outcome never does.
+  return context.answerOutcomes?.[category]?.kind === 'concrete';
 }

@@ -75,6 +75,20 @@ export function materialStateProjection(context: ConversationContext, routingDec
     .sort()
     .map((key) => key + '~' + String(context.answers[key]))
     .join('|');
+  // BUILD 04B §15.2: typed answer outcomes are material state (validated
+  // concrete value, accepted unknown or invalid reason); capturedAtTurn is
+  // administrative ordering and deliberately excluded.
+  const typedAnswers = Object.keys(context.answerOutcomes ?? {})
+    .sort()
+    .map((key) => {
+      const outcome = context.answerOutcomes?.[key];
+      if (outcome === undefined) {
+        return key + '~-';
+      }
+      const detail = outcome.kind === 'concrete' ? outcome.value : outcome.kind === 'invalid' ? outcome.reasonCode : '-';
+      return key + '~' + outcome.kind + '~' + detail;
+    })
+    .join('|');
   const intent = context.intentClassification?.value ?? context.intent ?? 'unknown';
   const missing = calculateMissingFacts(context, FICTIONAL_REQUIREMENT_RULES);
   const security = [context.intakeType ?? '-', context.facts.securityIndicators?.value ?? '-'].join('~');
@@ -82,6 +96,7 @@ export function materialStateProjection(context: ConversationContext, routingDec
     'intent~' + intent,
     'facts~' + facts,
     'answers~' + answers,
+    'typedAnswers~' + typedAnswers,
     'ticket~' + (context.intakeType ?? '-'),
     'security~' + security,
     'requirements~' + missing.required.join(',') + '~' + missing.missing.join(','),

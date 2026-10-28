@@ -35,7 +35,7 @@ export const FICTIONAL_RECOGNITION_CATALOG: RecognitionCatalog = {
     { canonical: 'laptop', aliases: ['laptop', 'notebook'] },
     { canonical: 'telefoon', aliases: ['telefoon', 'mobiel', 'smartphone'] },
     { canonical: 'printer', aliases: ['printer'] },
-    { canonical: 'desktop', aliases: ['pc', 'computer', 'werkstation'] },
+    { canonical: 'desktop', aliases: ['desktop', 'pc', 'computer', 'werkstation'] },
     { canonical: 'muis', aliases: ['muis'] },
   ],
 };
