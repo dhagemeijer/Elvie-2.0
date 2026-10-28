@@ -1,50 +1,284 @@
-/* Elvie chat shell — functional styling, not final visual design. */
+/* ==========================================================================
+   Elvie — BUILD 05 UI
+   Calm, municipal styling: soft blue-grey palette, generous whitespace,
+   clear typography. Responsive for desktop, tablet and mobile, with
+   44px+ touch targets, visible keyboard focus and reduced-motion support.
+   ========================================================================== */
+
+:root {
+  --elvie-primary: #2c5f8a;
+  --elvie-primary-strong: #1f4768;
+  --elvie-ink: #22303c;
+  --elvie-muted: #5c6b78;
+  --elvie-line: #d8e0e8;
+  --elvie-bg: #f2f5f8;
+  --elvie-surface: #ffffff;
+  --elvie-elvie-bubble: #eef4f9;
+  --elvie-error-bg: #fdeceb;
+  --elvie-error-ink: #9c2f24;
+  --elvie-badge-bg: #fdf3d7;
+  --elvie-badge-ink: #7a5c12;
+  --elvie-badge-line: #eeddab;
+  --elvie-focus: #1a66b3;
+  --elvie-radius: 14px;
+  --elvie-tap: 44px;
+}
+
+* {
+  box-sizing: border-box;
+}
 
 .elvie-shell {
   display: flex;
   flex-direction: column;
-  max-width: 480px;
-  margin: 0 auto;
+  width: 100%;
+  max-width: 720px;
   height: 100vh;
-  box-sizing: border-box;
+  height: 100dvh;
+  margin: 0 auto;
   padding: 1rem;
   gap: 0.75rem;
+  background: var(--elvie-bg);
+  color: var(--elvie-ink);
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+/* --- Header --------------------------------------------------------------- */
+
+.elvie-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.75rem 1rem;
+  background: var(--elvie-surface);
+  border: 1px solid var(--elvie-line);
+  border-radius: var(--elvie-radius);
+}
+
+.elvie-identity {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-right: auto;
+}
+
+.elvie-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--elvie-primary), #4c86b8);
+  color: #fff;
+  font-weight: 700;
+  font-size: 1.15rem;
+  flex: none;
 }
 
 .elvie-header h1 {
-  font-size: 1.1rem;
+  font-size: 1.15rem;
   margin: 0;
+  color: var(--elvie-primary-strong);
 }
+
+.elvie-subtitle {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--elvie-muted);
+}
+
+.elvie-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 0.35rem 0.6rem;
+  border-radius: 999px;
+  background: var(--elvie-badge-bg);
+  color: var(--elvie-badge-ink);
+  border: 1px solid var(--elvie-badge-line);
+  white-space: nowrap;
+}
+
+.elvie-reset {
+  min-height: var(--elvie-tap);
+  padding: 0 0.9rem;
+  border-radius: 10px;
+  border: 1px solid var(--elvie-line);
+  background: var(--elvie-surface);
+  color: var(--elvie-primary-strong);
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.elvie-reset:hover {
+  background: var(--elvie-elvie-bubble);
+}
+
+/* --- Message log ---------------------------------------------------------- */
 
 .elvie-log {
   flex: 1;
   overflow-y: auto;
-  border: 1px solid #ccc;
-  border-radius: 8px;
-  padding: 0.75rem;
-  background: #fafafa;
+  padding: 1rem;
+  background: var(--elvie-surface);
+  border: 1px solid var(--elvie-line);
+  border-radius: var(--elvie-radius);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.elvie-bubble {
+  display: flex;
+  flex-direction: column;
+  max-width: 85%;
+}
+
+.elvie-bubble--elvie {
+  align-self: flex-start;
+}
+
+.elvie-bubble--employee {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.elvie-who {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--elvie-muted);
+  margin-bottom: 0.15rem;
 }
 
 .elvie-message {
-  margin: 0.25rem 0;
-  padding: 0.5rem 0.75rem;
-  border-radius: 8px;
+  margin: 0;
+  padding: 0.6rem 0.85rem;
+  border-radius: var(--elvie-radius);
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .elvie-message--elvie {
-  background: #e8f0fe;
+  background: var(--elvie-elvie-bubble);
+  border: 1px solid var(--elvie-line);
 }
 
 .elvie-message--employee {
-  background: #e6f4ea;
-  text-align: right;
+  background: var(--elvie-primary);
+  color: #fff;
+  border-bottom-right-radius: 4px;
 }
 
 .elvie-message--error {
-  background: #fdecea;
-  color: #a12;
+  background: var(--elvie-error-bg);
+  color: var(--elvie-error-ink);
+  border: 1px solid #f2c7c3;
 }
+
+/* Structured preview/article card (server-owned engine text). */
+.elvie-card {
+  align-self: stretch;
+  max-width: none;
+  width: 100%;
+  background: var(--elvie-surface);
+  border: 1px solid var(--elvie-line);
+  border-left: 4px solid var(--elvie-primary);
+  border-radius: var(--elvie-radius);
+  padding: 0.75rem 0.9rem;
+}
+
+.elvie-card-row {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.2rem 0;
+  flex-wrap: wrap;
+}
+
+.elvie-card-label {
+  font-weight: 600;
+  color: var(--elvie-primary-strong);
+  flex: none;
+}
+
+.elvie-card-value {
+  color: var(--elvie-ink);
+}
+
+/* --- Busy status ---------------------------------------------------------- */
+
+.elvie-status {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--elvie-muted);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.elvie-status::before {
+  content: '';
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--elvie-primary);
+  animation: elvie-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes elvie-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .elvie-status::before {
+    animation: none;
+  }
+}
+
+/* --- Quick replies -------------------------------------------------------- */
+
+.elvie-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.elvie-chips:empty {
+  display: none;
+}
+
+.elvie-chip {
+  min-height: 40px;
+  padding: 0.35rem 0.85rem;
+  border-radius: 999px;
+  border: 1px solid var(--elvice-line, var(--elvie-line));
+  background: var(--elvie-surface);
+  color: var(--elvie-primary-strong);
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.elvie-chip:hover {
+  background: var(--elvie-elvie-bubble);
+}
+
+.elvie-chip:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* --- Input form ----------------------------------------------------------- */
 
 .elvie-form {
   display: flex;
@@ -53,28 +287,78 @@
 
 .elvie-input {
   flex: 1;
-  padding: 0.5rem 0.75rem;
-  font-size: 1rem;
-  border: 1px solid #888;
-  border-radius: 6px;
+  min-height: var(--elvie-tap);
+  padding: 0.5rem 0.85rem;
+  font-size: 16px; /* prevents zoom-on-focus on iOS */
+  border: 1px solid var(--elvie-line);
+  border-radius: 10px;
+  background: var(--elvie-surface);
+  color: var(--elvie-ink);
 }
 
 .elvie-send {
-  padding: 0.5rem 1rem;
-  font-size: 1rem;
-  border: 1px solid #888;
-  border-radius: 6px;
-  background: #fff;
+  min-height: var(--elvie-tap);
+  min-width: 52px;
+  padding: 0 1.1rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+  border: none;
+  border-radius: 10px;
+  background: var(--elvie-primary);
+  color: #fff;
+  cursor: pointer;
 }
 
-/* Visible focus for keyboard users. */
-.elvie-input:focus-visible,
-.elvie-send:focus-visible {
-  outline: 3px solid #1a73e8;
-  outline-offset: 2px;
+.elvie-send:hover {
+  background: var(--elvie-primary-strong);
 }
 
 .elvie-input:disabled,
 .elvie-send:disabled {
   opacity: 0.6;
+}
+
+/* --- Keyboard focus ------------------------------------------------------- */
+
+.elvie-input:focus-visible,
+.elvie-send:focus-visible,
+.elvie-chip:focus-visible,
+.elvie-reset:focus-visible {
+  outline: 3px solid var(--elvie-focus);
+  outline-offset: 2px;
+}
+
+/* --- Mobile --------------------------------------------------------------- */
+
+@media (max-width: 640px) {
+  .elvie-shell {
+    padding: 0.6rem;
+    gap: 0.55rem;
+    font-size: 15px;
+  }
+
+  .elvie-header {
+    padding: 0.6rem 0.75rem;
+  }
+
+  .elvie-badge {
+    width: 100%;
+    text-align: center;
+  }
+
+  .elvie-log {
+    padding: 0.7rem;
+  }
+
+  .elvie-bubble {
+    max-width: 94%;
+  }
+
+  .elvie-chip {
+    flex: 1 1 auto;
+  }
+
+  .elvie-send {
+    min-width: var(--elvie-tap);
+  }
 }
