@@ -52,13 +52,19 @@ describe('ConversationEngine — BUILD 04C preview and corrections (§7.2, P-01.
     // The submitted draft is EXACTLY the confirmed snapshot content.
     const snapshot = engine.currentPreviewSnapshot;
     const draft = ticket.submittedDrafts[0];
+    const content = snapshot?.content;
     expect(snapshot).not.toBeNull();
-    expect(draft.summary).toBe(snapshot?.content.summary);
-    expect(draft.description).toBe(snapshot?.content.description);
-    expect(draft.context['onderwerp']).toBe(snapshot?.content.context['onderwerp']);
-    expect(draft.context['apparaat']).toBe(snapshot?.content.context['apparaat']);
-    expect(draft.context['symptoom']).toBe(snapshot?.content.context['symptoom']);
-    expect(draft.category).toBe(snapshot?.content.category);
+    expect(draft).toBeDefined();
+    expect(content).toBeDefined();
+    if (draft === undefined || content === undefined) {
+      throw new Error('submitted draft or snapshot content missing');
+    }
+    expect(draft.summary).toBe(content.summary);
+    expect(draft.description).toBe(content.description);
+    expect(draft.context['onderwerp']).toBe(content.context['onderwerp']);
+    expect(draft.context['apparaat']).toBe(content.context['apparaat']);
+    expect(draft.context['symptoom']).toBe(content.context['symptoom']);
+    expect(draft.category).toBe(content.category);
   });
 
   it('a material correction bumps the revision once and the old snapshot can never submit (P-03/P-07/P-13)', async () => {
