@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { createChatShell } from '../src/ui/chat-shell';
 import { ConversationEngine } from '../src/services/conversation-engine';
 import { MockIdentityProvider } from '../src/mocks/mock-identity';
@@ -183,7 +182,8 @@ describe('BUILD 05 — end-to-end conversations', () => {
     await driveToPreview(root);
 
     // Structured preview card from the server-owned snapshot.
-    const card = root.querySelector('.elvie-card');
+    // The LAST card is the preview: earlier cards may hold knowledge articles.
+    const card = [...root.querySelectorAll('.elvie-card')].pop();
     expect(card?.textContent).toContain('Categorie: melding');
     expect(logText(root)).toContain('Functionele route');
     expect(logText(root)).toContain('niets naar TOPdesk verzonden');
@@ -272,8 +272,9 @@ describe('BUILD 05 — end-to-end conversations', () => {
     submit(root, 'het is eigenlijk een desktop');
     await flush(root);
     expect(logText(root)).toContain('bijgewerkte melding');
-    expect(root.querySelector('.elvie-card')?.textContent).toContain('Apparaat:');
-    expect(root.querySelector('.elvie-card')?.textContent).toContain('desktop');
+    const card = [...root.querySelectorAll('.elvie-card')].pop();
+    expect(card?.textContent).toContain('Apparaat:');
+    expect(card?.textContent).toContain('desktop');
     root.remove();
   });
 });
@@ -374,7 +375,7 @@ describe('BUILD 05 — accessibility, mobile and hardening', () => {
       expect((button.getAttribute('aria-label') ?? button.textContent)?.length ?? '').not.toBe('');
     }
     // The stylesheet ships responsive and touch-target rules.
-    const css = readFileSync(fileURLToPath(new URL('../src/ui/elvie.css', import.meta.url)), 'utf8');
+    const css = readFileSync('src/ui/elvie.css', 'utf8');
     expect(css).toContain('@media (max-width: 640px)');
     expect(css).toContain('prefers-reduced-motion');
     expect(css).toContain('min-height: var(--elvie-tap)');
