@@ -190,18 +190,18 @@ function mount(root: HTMLElement, engine: ConversationEngine, options: ChatShell
 
   const appendElvieMessage = (text: string): void => {
     lastElvieText = text;
+    // Multi-line engine text (knowledge article, ticket preview) is
+    // rendered exactly once as a structured card.
+    if (text.includes('\n')) {
+      appendElvieCard(text);
+      scrollToBottom();
+      return;
+    }
     const wrap = document.createElement('div');
     wrap.className = 'elvie-bubble elvie-bubble--elvie';
     const who = document.createElement('span');
     who.className = 'elvie-who';
     who.textContent = 'Elvie';
-    if (text.includes('\n')) {
-      appendElvieCard(text);
-      if (text.startsWith('Categorie:')) {
-        wrap.remove();
-        return;
-      }
-    }
     const line = document.createElement('p');
     line.className = 'elvie-message elvie-message--elvie';
     line.textContent = text;

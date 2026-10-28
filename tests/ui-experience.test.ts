@@ -29,9 +29,9 @@ function createEngine(ticket: TicketPort = new MockTicketProvider()): Conversati
   });
 }
 
-function mount(root: HTMLElement, ticket: TicketPort = new MockTicketProvider(), createEngine?: () => ConversationEngine): ConversationEngine {
-  const engine = createEngine ?? createEngineFactory(ticket)();
-  createChatShell(root, engine, createEngine === undefined ? {} : { createEngine });
+function mount(root: HTMLElement, ticket: TicketPort = new MockTicketProvider(), factory?: () => ConversationEngine): ConversationEngine {
+  const engine = factory !== undefined ? factory() : createEngineFactory(ticket)();
+  createChatShell(root, engine, factory !== undefined ? { createEngine: factory } : {});
   return engine;
 }
 

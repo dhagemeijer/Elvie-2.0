@@ -261,7 +261,7 @@
   min-height: 40px;
   padding: 0.35rem 0.85rem;
   border-radius: 999px;
-  border: 1px solid var(--elvice-line, var(--elvie-line));
+  border: 1px solid var(--elvie-line);
   background: var(--elvie-surface);
   color: var(--elvie-primary-strong);
   font-size: 0.9rem;
