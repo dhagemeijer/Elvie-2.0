@@ -104,7 +104,11 @@ describe('ConversationEngine — submission concurrency (§15.5, F-11/S-01/S-16)
     const first = engine.handleEmployeeInput('versturen');
     await flush();
     expect(port.calls).toBe(1);
-    const claimedDraft = { ...port.drafts[0], context: { ...port.drafts[0].context } };
+    const claimed = port.drafts[0];
+    if (claimed === undefined) {
+      throw new Error('no draft was claimed');
+    }
+    const claimedDraft = { ...claimed, context: { ...claimed.context } };
 
     const correction = engine.handleEmployeeInput('het is eigenlijk een desktop');
     await flush();
@@ -113,7 +117,7 @@ describe('ConversationEngine — submission concurrency (§15.5, F-11/S-01/S-16)
 
     expect(port.calls).toBe(1);
     expect(port.drafts.length).toBe(1);
-    expect(port.drafts[0].context).toEqual(claimedDraft.context);
+    expect(port.drafts[0]?.context).toEqual(claimedDraft.context);
     expect(engine.currentState).toBe('CONFIRM');
   });
 });
