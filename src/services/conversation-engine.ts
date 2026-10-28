@@ -702,6 +702,11 @@ export class ConversationEngine {
    */
   private nextIntakeQuestion(): { field: FactCategory; text: string } | undefined {
     const context = this.requireContext();
+    // F-06/I-10: a security report always takes the safe security route and
+    // is never blocked or interrogated: the safe handover has priority.
+    if (this.intakeCategory() === 'security') {
+      return undefined;
+    }
     const validation = validateIntake(context, this.intakeCategory(), this.functionalRoute());
     this.lastValidation = validation;
     const missingField = validation.fields.find((field) => field.status === 'missing');
