@@ -157,9 +157,36 @@ function compareRelevance(
 }
 
 /**
+ * BUILD 05.1 context-relevance control (practical-test finding 01):
+ * when the query defines its PRIMARY PROBLEM CONTEXT (a subject or a
+ * requested resource), an article is relevant only when it demonstrably
+ * matches that context (subject or resource match rule) or when at least
+ * MIN_RELEVANT_KEYWORD_OVERLAPS controlled keywords overlap. A shared
+ * generic symptom alone (for example 'not_working', which applies to a
+ * printer, Outlook and many other subjects) is NOT sufficient content
+ * relevance: a printer problem must never be offered an Outlook solution.
+ * Queries without a primary context keep the approved v5.2 threshold
+ * unchanged. The rule is deterministic, explainable and testable.
+ */
+function matchesQueryContext(
+  query: KnowledgeSearchQuery,
+  explanation: readonly RankingExplanation[],
+  keywordOverlapCount: number,
+): boolean {
+  if (query.subject === undefined && query.requestedResource === undefined) {
+    return true;
+  }
+  const matchesContext = explanation.some(
+    (record) => record.ruleId === 'rank_subject_exact' || record.ruleId === 'rank_resource_match',
+  );
+  return matchesContext || keywordOverlapCount >= MIN_RELEVANT_KEYWORD_OVERLAPS;
+}
+
+/**
  * Rank gated articles against the query. Articles below the relevance
- * threshold are excluded; the remaining order is fully deterministic
- * (lexicographic rule tuple, tie-break on article id ascending).
+ * threshold or without the query's primary context are excluded; the
+ * remaining order is fully deterministic (lexicographic rule tuple,
+ * tie-break on article id ascending).
  */
 export function rankKnowledgeArticles(
   gatedArticles: readonly KnowledgeArticle[],
@@ -170,7 +197,10 @@ export function rankKnowledgeArticles(
     const explanation = explanationFor(article, query);
     const keywordOverlapCount =
       explanation.find((record) => record.ruleId === 'rank_keyword_match')?.matchedTerms.length ?? 0;
-    if (meetsRelevanceThreshold(explanation, keywordOverlapCount)) {
+    if (
+      meetsRelevanceThreshold(explanation, keywordOverlapCount) &&
+      matchesQueryContext(query, explanation, keywordOverlapCount)
+    ) {
       ranked.push({ article, explanation });
     }
   }

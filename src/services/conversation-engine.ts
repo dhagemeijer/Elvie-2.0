@@ -899,15 +899,25 @@ export class ConversationEngine {
     }
     const lines: string[] = [];
     lines.push('Categorie: ' + categoryLabel(snapshot.content.category));
+    // BUILD 05.1 (finding 03): B1 presentation, no internal route codes.
     lines.push(
       snapshot.content.route === 'unknown'
-        ? 'Functionele route: onbekend (intern)'
-        : 'Functionele route: ' + snapshot.content.route + ' (intern, geen TOPdesk-toewijzing)',
+        ? 'Soort probleem: nog niet bekend (intern voorbeeld)'
+        : 'Soort probleem: ' + presentationRoute(snapshot.content.route) + ' (intern, geen echte TOPdesk-toewijzing)',
     );
     for (const [key, label] of PREVIEW_FIELD_LABELS) {
       const value = snapshot.content.context[key];
       if (value !== undefined) {
-        lines.push(label + ': ' + value + (snapshot.content.provenance[key] === 'afgeleid' ? ' (afgeleid)' : ''));
+        // BUILD 05.1 (finding 03): internal symptom codes become plain B1
+        // Dutch; derived values are explicitly marked as derived from the
+        // employee's own description.
+        const shown = key === 'symptoom' ? presentationSymptom(value) : value;
+        lines.push(
+          label +
+            ': ' +
+            shown +
+            (snapshot.content.provenance[key] === 'afgeleid' ? ' (afgeleid uit je omschrijving)' : ''),
+        );
       }
     }
     for (const field of snapshot.content.unknownFields) {
@@ -1420,6 +1430,37 @@ const FIELD_LABELS: Readonly<Record<string, string>> = {
   startTime: 'Begintijd',
   impact: 'Impact',
 };
+
+/**
+ * BUILD 05.1 (finding 03): presentation-only mapping of INTERNAL codes to
+ * plain B1 Dutch for the employee-facing preview. The internal values in
+ * the snapshot, the TicketDraft and the audit trail remain completely
+ * unchanged, so routing, incident data and traceability are preserved;
+ * this mapping only changes how values are SHOWN to the employee.
+ */
+const SYMPTOM_PRESENTATION_LABELS: Readonly<Record<string, string>> = {
+  not_working: 'Werkt niet',
+  no_connection: 'Geen verbinding',
+  unavailable: 'Kan niet inloggen',
+  erratic_behavior: 'Werkt onregelmatig',
+};
+
+const ROUTE_PRESENTATION_LABELS: Readonly<Record<string, string>> = {
+  workplace: 'Werkplek en apparatuur',
+  application: 'Applicatie of programma',
+  access: 'Toegang en account',
+  connectivity: 'Netwerk en verbinding',
+  communication: 'E-mail en berichten',
+  security: 'Beveiliging',
+};
+
+function presentationSymptom(value: string): string {
+  return SYMPTOM_PRESENTATION_LABELS[value] ?? value;
+}
+
+function presentationRoute(route: string): string {
+  return ROUTE_PRESENTATION_LABELS[route] ?? route;
+}
 
 /** Preview render order for the validated content fields. */
 const PREVIEW_FIELD_LABELS: readonly (readonly [string, string])[] = [
