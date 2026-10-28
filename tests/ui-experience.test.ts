@@ -185,7 +185,7 @@ describe('BUILD 05 — end-to-end conversations', () => {
     // The LAST card is the preview: earlier cards may hold knowledge articles.
     const card = [...root.querySelectorAll('.elvie-card')].pop();
     expect(card?.textContent).toContain('Categorie: melding');
-    expect(logText(root)).toContain('Functionele route');
+    expect(logText(root)).toContain('Soort probleem');
     expect(logText(root)).toContain('niets naar TOPdesk verzonden');
     // Questions were asked one at a time; nothing was asked twice.
     expect(logText(root).split('Lost dit je probleem op?').length - 1).toBeGreaterThanOrEqual(1);
@@ -531,6 +531,49 @@ describe('BUILD 05 — targeted fixes: reset lifecycle and typed quick replies',
     expect(logText(root)).toMatch(/SIM-incident-\d{4}/);
     // CONFIRM is terminal: no quick replies remain.
     expect(chips(root)).toHaveLength(0);
+    root.remove();
+  });
+
+  it('E. the busy indicator is only visible during actual processing (finding 02)', async () => {
+    const port = new DeferredTicketPort();
+    const root = document.createElement('div');
+    document.body.append(root);
+    mount(root, port);
+    const statusEl = (): HTMLElement | null => root.querySelector('.elvie-status') as HTMLElement | null;
+    // Boot is in flight: the indicator is visible.
+    expect(statusEl()?.hidden).toBe(false);
+    await flush(root);
+    // Idle after boot: the indicator is fully gone, also VISUALLY — the
+    // stylesheet keeps [hidden] effective over the display:flex rule.
+    expect(statusEl()?.hidden).toBe(true);
+    const css = readFileSync('src/ui/elvie.css', 'utf8');
+    expect(css).toContain('.elvie-status[hidden]');
+
+    await driveToPreview(root);
+    submit(root, 'bevestigen');
+    // In-flight submission: visible again.
+    expect(statusEl()?.hidden).toBe(false);
+    await flush(root);
+    port.release('SIM-incident-0421');
+    await flush(root);
+    await flush(root);
+    // Completed: the indicator disappears after every finished action.
+    expect(statusEl()?.hidden).toBe(true);
+    expect(logText(root)).toContain('SIM-incident-0421');
+    root.remove();
+  });
+
+  it('F. the preview card uses plain Dutch: no internal route or symptom codes (finding 03)', async () => {
+    const root = document.createElement('div');
+    document.body.append(root);
+    mount(root);
+    await driveToPreview(root);
+    const card = [...root.querySelectorAll('.elvie-card')].pop();
+    expect(card?.textContent).toContain('Soort probleem: Werkplek en apparatuur');
+    expect(card?.textContent).toContain('Symptoom: Werkt niet (afgeleid uit je omschrijving)');
+    expect(card?.textContent).not.toContain('Functionele route');
+    expect(card?.textContent).not.toContain('workplace');
+    expect(card?.textContent).not.toContain('not_working');
     root.remove();
   });
 });

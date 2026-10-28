@@ -101,12 +101,10 @@ describe('knowledge ranking (BUILD_03.md v5.2 par. 5)', () => {
       { ruleId: 'rank_symptom_match', matchedTerms: ['no_connection'] },
       { ruleId: 'rank_keyword_match', matchedTerms: ['laptop'] },
     ]);
-    expect(explanationOf(ranked[1]?.explanation)).toEqual([
-      { ruleId: 'rank_symptom_match', matchedTerms: ['no_connection'] },
-    ]);
-    // kb-keyword is keyword-only with a single keyword overlap: below the
-    // approved relevance threshold and therefore excluded.
-    expect(ranked).toHaveLength(2);
+    // BUILD 05.1 context relevance: kb-symptom matches only the shared
+    // symptom while the query defines subject 'laptop' — excluded, exactly
+    // like the keyword-only single-overlap article.
+    expect(ranked).toHaveLength(1);
   });
 
   it('applies the relevance threshold: unmatched articles are excluded', () => {
@@ -158,7 +156,8 @@ describe('knowledge ranking (BUILD_03.md v5.2 par. 5)', () => {
     const keywordPlusSymptom = makeArticle('m-keyword-symptom', { symptom: 'no_connection', keywords: ['laptop'] });
     const subjectSymptom = makeArticle('z-subject-symptom', { subject: 'laptop', symptom: 'no_connection' });
     const ranked = rankKnowledgeArticles([keywordOnly, keywordPlusSymptom, subjectSymptom], query);
-    expect(ranked.map((entry) => entry.article.id)).toEqual(['z-subject-symptom', 'm-keyword-symptom']);
+    // BUILD 05.1: m-keyword-symptom has no subject match: excluded.
+    expect(ranked.map((entry) => entry.article.id)).toEqual(['z-subject-symptom']);
   });
 
   it('breaks ties deterministically on the article id', () => {
@@ -177,7 +176,8 @@ describe('knowledge ranking (BUILD_03.md v5.2 par. 5)', () => {
     const first = rankKnowledgeArticles(articles, query);
     const second = rankKnowledgeArticles(articles, query);
     expect(first).toEqual(second);
-    expect(first.map((entry) => entry.article.id)).toEqual(['kb-1', 'kb-3']);
+    // BUILD 05.1: kb-3 (symptom + single keyword, no subject) is excluded.
+    expect(first.map((entry) => entry.article.id)).toEqual(['kb-1']);
   });
 
   it('applies the resource match rule for requests', () => {
@@ -194,6 +194,57 @@ describe('knowledge ranking (BUILD_03.md v5.2 par. 5)', () => {
       { ruleId: 'rank_resource_match', matchedTerms: ['Mailbox'] },
       { ruleId: 'rank_keyword_match', matchedTerms: ['Mailbox'] },
     ]);
+  });
+});
+
+describe('BUILD 05.1 context relevance (practical-test finding 01)', () => {
+  const printerQuery = {
+    intent: 'incident' as const,
+    subject: 'printer',
+    symptom: 'not_working',
+    requestedResource: undefined,
+    keywords: ['printer'],
+  };
+
+  it('never offers an article about a different subject on a shared symptom alone (printer vs Outlook)', () => {
+    const printer = makeArticle('kb-printer', { subject: 'printer', symptom: 'not_working', keywords: ['printer'] });
+    const outlook = makeArticle('kb-outlook', { subject: 'Outlook', symptom: 'not_working', keywords: ['Outlook'] });
+    const ranked = rankKnowledgeArticles([printer, outlook], printerQuery);
+    expect(ranked.map((entry) => entry.article.id)).toEqual(['kb-printer']);
+  });
+
+  it('keeps multiple genuinely relevant articles ranked in the deterministic order', () => {
+    const a = makeArticle('kb-a', { subject: 'printer', symptom: 'not_working' });
+    const b = makeArticle('kb-b', { subject: 'printer' });
+    const ranked = rankKnowledgeArticles([b, a], printerQuery);
+    expect(ranked.map((entry) => entry.article.id)).toEqual(['kb-a', 'kb-b']);
+  });
+
+  it('keeps the approved threshold unchanged for queries without a primary context', () => {
+    const symptomOnlyQuery = {
+      intent: 'incident' as const,
+      subject: undefined,
+      symptom: 'not_working',
+      requestedResource: undefined,
+      keywords: [],
+    };
+    const shared = makeArticle('kb-shared', { symptom: 'not_working' });
+    const ranked = rankKnowledgeArticles([shared], symptomOnlyQuery);
+    expect(ranked.map((entry) => entry.article.id)).toEqual(['kb-shared']);
+  });
+
+  it('keeps a two-keyword overlap relevant even with a primary context in the query', () => {
+    const doubleKeyword = makeArticle('kb-double', { keywords: ['printer', 'not_working'] });
+    const ranked = rankKnowledgeArticles([doubleKeyword], { ...printerQuery, keywords: ['printer', 'not_working'] });
+    expect(ranked.map((entry) => entry.article.id)).toEqual(['kb-double']);
+  });
+
+  it('is still deterministic with the context rule (identical input, identical output)', () => {
+    const articles = [
+      makeArticle('kb-p', { subject: 'printer' }),
+      makeArticle('kb-o', { subject: 'Outlook', symptom: 'not_working' }),
+    ];
+    expect(rankKnowledgeArticles(articles, printerQuery)).toEqual(rankKnowledgeArticles(articles, printerQuery));
   });
 });
 

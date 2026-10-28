@@ -220,6 +220,13 @@
   gap: 0.4rem;
 }
 
+/* BUILD 05.1 (finding 02): 'display: flex' on the status element must
+   never override the hidden attribute, or 'Elvie denkt na…' stays visible
+   on every screenshot, even long after the turn completed. */
+.elvie-status[hidden] {
+  display: none;
+}
+
 .elvie-status::before {
   content: '';
   width: 0.55rem;

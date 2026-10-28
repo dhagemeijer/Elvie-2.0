@@ -39,7 +39,8 @@ describe('ConversationEngine — BUILD 04C preview and corrections (§7.2, P-01.
     const preview = await driveToPreview(engine);
     expect(engine.currentState).toBe('PREVIEW');
     expect(preview).toContain('Categorie: melding');
-    expect(preview).toContain('Functionele route: workplace');
+    // BUILD 05.1 (finding 03): plain B1 presentation, no internal route code.
+    expect(preview).toContain('Soort probleem: Werkplek en apparatuur');
     expect(preview).toContain('simulatie');
     expect(preview).toContain('niets naar TOPdesk verzonden');
 
