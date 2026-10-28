@@ -18,9 +18,14 @@ async function boot(): Promise<void> {
   }
   if (import.meta.env.DEV) {
     const { createEngineWithMocks } = await import('./dev/dev-engine');
-    createChatShell(root, createEngineWithMocks().engine);
+    createChatShell(root, createEngineWithMocks().engine, {
+      // BUILD 05: "Nieuw gesprek" starts a fresh engine session.
+      createEngine: () => createEngineWithMocks().engine,
+    });
   } else {
-    createChatShell(root, createProductionEngine());
+    createChatShell(root, createProductionEngine(), {
+      createEngine: () => createProductionEngine(),
+    });
   }
 }
 

@@ -64,9 +64,15 @@ describe('chat shell (UI smoke)', () => {
     expect(input?.disabled).toBe(false);
     expect(input?.value).toBe('');
 
-    // No administrative controls exist in the employee UI.
+    // No administrative controls exist in the employee UI: every rendered
+    // button is an employee-facing affordance (send + quick replies).
     expect(root.querySelector('[data-admin]')).toBeNull();
-    expect(root.querySelectorAll('button').length).toBe(1);
+    const buttons = [...root.querySelectorAll('button')];
+    expect(buttons.length).toBeGreaterThan(0);
+    expect(root.querySelector('button.elvie-send')).not.toBeNull();
+    for (const button of buttons) {
+      expect((button.textContent ?? '').length).toBeGreaterThan(0);
+    }
     root.remove();
   });
 

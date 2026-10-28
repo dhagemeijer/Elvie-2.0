@@ -1,4 +1,10 @@
-import type { ConversationContext, ConversationStateName, IntakeType } from '../domain/conversation-context';
+import type {
+  ConversationContext,
+  ConversationStateName,
+  IntakeType,
+  KnowledgePhase,
+  SubmissionStatus,
+} from '../domain/conversation-context';
 import { classifyAnswerOutcome, clearAnswerOutcome, recordAnswerOutcome } from '../domain/answer-outcome';
 import { UNKNOWN_LABEL, validateIntake, type IntakeValidationResult } from '../domain/intake-policy';
 import { buildDraftFromContent, buildTicketContent, type TicketContent } from '../domain/ticket-content';
@@ -32,6 +38,37 @@ export type ChatMessageRole = 'elvie' | 'employee' | 'error';
 export interface ChatMessage {
   readonly role: ChatMessageRole;
   readonly text: string;
+}
+
+/**
+ * BUILD 05 targeted fix: minimal READ-ONLY presentation snapshot for the
+ * UI shell. A pure projection of existing engine state (lifecycle state,
+ * intake type, knowledge phase, submission status and the derived
+ * confirmation affordances): no transitions, no new states, no second
+ * state machine and no conversation content. The shell derives its quick
+ * replies strictly from this typed metadata, never from message text
+ * (which can also appear in knowledge articles or error messages).
+ */
+export interface PresentationSnapshot {
+  /** Current authoritative lifecycle state (null before start). */
+  readonly state: ConversationStateName | null;
+  /** Effective intake type, if already determinate. */
+  readonly intakeType: IntakeType | undefined;
+  /** Knowledge/resolution substatus within KNOWLEDGE_SEARCH. */
+  readonly knowledgePhase: KnowledgePhase | undefined;
+  /** Logical submission status of the ticket attempt. */
+  readonly submissionStatus: SubmissionStatus | undefined;
+  /**
+   * PREVIEW, subphase awaiting_confirmation, snapshot current and no
+   * submission in flight: an explicit confirmation command is allowed
+   * (the engine keeps enforcing the eight confirmation words and their
+   * phase restrictions; this flag only says the phase permits it).
+   */
+  readonly confirmable: boolean;
+  /** PREVIEW with an inconclusive submission: only a status check may recover. */
+  readonly statusCheckable: boolean;
+  /** PREVIEW with an open correction question awaiting an answer. */
+  readonly previewCorrectionQuestionOpen: boolean;
 }
 
 /** Maximum number of distinct knowledge articles per resolution series. */
@@ -234,6 +271,32 @@ export class ConversationEngine {
   /** Build 04B: latest intake validation result (diagnostics/tests). */
   public get currentIntakeValidation(): IntakeValidationResult | null {
     return this.lastValidation;
+  }
+
+  /**
+   * BUILD 05 targeted fix: the read-only presentation snapshot for the UI
+   * shell (see PresentationSnapshot). Derived exclusively from existing,
+   * authoritative engine state; this getter never mutates anything.
+   */
+  public get currentPresentation(): PresentationSnapshot {
+    const context = this.context;
+    const state = this.currentState;
+    const submissionStatus = context?.submission.status;
+    return {
+      state,
+      intakeType: context?.intakeType,
+      knowledgePhase: context?.knowledgePhase,
+      submissionStatus,
+      confirmable:
+        state === 'PREVIEW' &&
+        this.previewSubphase === 'awaiting_confirmation' &&
+        submissionStatus !== 'inconclusive' &&
+        !this.submissionInFlight &&
+        this.snapshotIsCurrent(),
+      statusCheckable: state === 'PREVIEW' && submissionStatus === 'inconclusive',
+      previewCorrectionQuestionOpen:
+        state === 'PREVIEW' && this.previewSubphase === 'awaiting_correction_answer',
+    };
   }
 
   /**
