@@ -20,7 +20,13 @@ describe('input normalisation (BUILD_02.md par. 9)', () => {
   it('applies the documented informal phrase variants', () => {
     expect(normalizeInput('outlook doet t niet')).toBe('outlook doet het niet');
     expect(normalizeInput('outlook werkt t niet')).toBe('outlook werkt het niet');
-    expect(Object.keys(PHRASE_MAP)).toEqual(['doet t', 'werkt t']);
+    expect(Object.keys(PHRASE_MAP)).toEqual(['doet t', 'werkt t', 'e mail']);
+  });
+
+  it('BUILD 05.2: restores the canonical "e-mail" spelling from "e mail"', () => {
+    expect(normalizeInput('Ik heb een verdachte e mail ontvangen.')).toBe(
+      'ik heb een verdachte e-mail ontvangen',
+    );
   });
 
   it('keeps hyphenated words like e-mail intact', () => {

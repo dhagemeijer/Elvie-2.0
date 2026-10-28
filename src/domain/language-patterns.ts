@@ -42,17 +42,36 @@ export interface SecurityPhraseRule extends PhraseRule {
 export const SECURITY_PHRASE_RULES: readonly SecurityPhraseRule[] = [
   {
     ruleId: 'sec_suspicious_message',
-    pattern: /\bverdachte mail\b|\bvreemde mail\b|\bphishing\b|\bspam\b/,
+    // BUILD 05.2 (B05-T05): also recognizes the suspicious E-MAIL spelling
+    // ("e-mail"/"email") and a suspicious bericht. A general question like
+    // "phishingmail" still does NOT match: \bphishing\b has no word
+    // boundary inside "phishingmail", so questions stay non-incidents.
+    pattern: /\b(?:verdachte|vreemde) (?:e-?mail|mail|bericht)\b|\bphishing\b|\bspam\b/,
     indicator: 'suspicious_message_received',
   },
   {
     ruleId: 'sec_link_clicked',
-    pattern: /\bop een link geklikt\b|\bgeklikt op een link\b|\blink aangeklikt\b|\bop een link gedrukt\b|\bop een link\b[^.!?]*\bgeklikt\b/,
+    // BUILD 05.2 (B05-T05): any common article (een|de|het|die|mijn),
+    // singular/plural link(s) and the common click verbs. An explicit
+    // denial ("niet op de link geklikt") never signals: every alternative
+    // is negation-guarded with a lookbehind, and the separated variant
+    // additionally rejects a "niet" between the link and the click.
+    pattern:
+      /(?<!\bniet )\bop (?:een|de|het|die|mijn) links? (?:geklikt|gedrukt)\b|(?<!\bniet )\bgeklikt op (?:een|de|het|die|mijn) links?\b|\blinks? aangeklikt\b|(?<!\bniet )\bop (?:een|de|het|die|mijn) links?\b(?![^.!?]*\bniet\b)[^.!?]*?\bgeklikt\b/,
     indicator: 'suspicious_link_clicked',
   },
   {
+    ruleId: 'sec_attachment_opened',
+    // BUILD 05.2: opening or downloading a suspicious/unknown attachment.
+    pattern: /\b(?:verdachte|vreemde|onbekende) bijlage\w* (?:geopend|gedownload)\b/,
+    indicator: 'suspicious_attachment_opened',
+  },
+  {
     ruleId: 'sec_account_compromise',
-    pattern: /\bgehackt\b|\baccount overgenomen\b|\bin gebroken\b/,
+    // BUILD 05.2 (B05-T05): also recognizes another person being logged in
+    // on the employee's own account (possible account takeover).
+    pattern:
+      /\bgehackt\b|\baccount overgenomen\b|\bin gebroken\b|\bingebroken\b|\biemand anders ingelogd\b/,
     indicator: 'suspected_account_compromise',
   },
 ];
@@ -68,7 +87,13 @@ export const SECURITY_PHRASE_RULES: readonly SecurityPhraseRule[] = [
  */
 export const CREDENTIALS_ENTERED_RULE: PhraseRule = {
   ruleId: 'sec_credentials_entered',
-  pattern: /\bwachtwoord ingevuld\b|\bwachtwoord ingevoerd\b|\binloggegevens ingevuld\b/,
+  // BUILD 05.2 (B05-T05): common credential nouns and verbs, including
+  // credentials left behind on a page and credentials shared with an
+  // unknown party. Negated statements ("geen/niet ... ingevuld") never
+  // signal. On its own this STILL proves only that credentials were
+  // entered — never phishing by itself.
+  pattern:
+    /(?<!\bgeen )(?<!\bniet )\b(?:wachtwoord|inloggegevens|paswoord) (?:ingevuld|ingevoerd|ingetypt|opgegeven|achtergelaten|gegeven|gedeeld|doorgestuurd)\b/,
 };
 
 export const REQUEST_PHRASE_RULES: readonly PhraseRule[] = [
