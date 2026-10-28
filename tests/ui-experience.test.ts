@@ -468,6 +468,8 @@ describe('BUILD 05 — targeted fixes: reset lifecycle and typed quick replies',
     resetButton(root).click();
     expect(created).toBe(1);
 
+    // Let the engine reach the pending ticket port before releasing it.
+    await flush(root);
     port.release('SIM-incident-0421');
     await flush(root);
     await flush(root);
