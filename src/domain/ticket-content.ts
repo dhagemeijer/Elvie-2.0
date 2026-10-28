@@ -11,7 +11,7 @@ import type { ConversationContext, IntakeType } from './conversation-context';
 import { getFact } from './conversation-context';
 import type { FactCategory } from './facts';
 import { getAnswerOutcome } from './answer-outcome';
-import { UNKNOWN_LABEL, type IntakeValidationResult } from './intake-policy';
+import type { IntakeValidationResult } from './intake-policy';
 import type { SubmissionKey, TicketDraft } from '../ports/ticket';
 
 export interface TicketContent {
