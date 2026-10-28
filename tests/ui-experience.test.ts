@@ -73,16 +73,25 @@ function clickChip(root: HTMLElement, label: string): void {
   chip.click();
 }
 
-async function flush(): Promise<void> {
-  for (let i = 0; i < 4; i += 1) {
+/**
+ * Let the shell settle: macroticks until it is idle (input re-enabled).
+ * This covers the async engine.start() boot and every in-flight turn, so
+ * a submitted message is never swallowed by the busy guard. Fail-closed
+ * states keep the input disabled; the tick budget ends the wait there.
+ */
+async function flush(root?: HTMLElement): Promise<void> {
+  for (let i = 0; i < 50; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 0));
+    if (root !== undefined && !input(root).disabled) {
+      break;
+    }
   }
 }
 
 /** Drive the deterministic incident flow through the UI to the preview. */
 async function driveToPreview(root: HTMLElement): Promise<void> {
   submit(root, 'printer print niet');
-  await flush();
+  await flush(root);
   let guard = 0;
   while (!logText(root).includes('Categorie:') && guard < 10) {
     if (chips(root).some((c) => c.textContent === 'Niet opgelost')) {
@@ -90,7 +99,7 @@ async function driveToPreview(root: HTMLElement): Promise<void> {
     } else {
       submit(root, 'niet opgelost');
     }
-    await flush();
+    await flush(root);
     guard += 1;
   }
   if (!logText(root).includes('Categorie:')) {
@@ -126,7 +135,7 @@ describe('BUILD 05 — chat interface', () => {
     const root = document.createElement('div');
     document.body.append(root);
     mount(root);
-    await flush();
+    await flush(root);
 
     expect(root.querySelector('.elvie-avatar')?.textContent).toBe('E');
     expect(root.querySelector('.elvie-badge')?.textContent).toContain('SIMULATIE');
@@ -146,7 +155,7 @@ describe('BUILD 05 — chat interface', () => {
       return createEngine();
     };
     createChatShell(root, factory(), { createEngine: factory });
-    await flush();
+    await flush(root);
     expect(created).toBe(1);
     const firstLog = logText(root);
     expect(firstLog).toContain('Elvie');
@@ -154,7 +163,7 @@ describe('BUILD 05 — chat interface', () => {
     const reset = [...root.querySelectorAll('button')].find((b) => b.textContent === 'Nieuw gesprek');
     expect(reset).toBeDefined();
     reset?.click();
-    await flush();
+    await flush(root);
     expect(created).toBe(2);
     // Fresh session: the log is a new greeting, the old content is gone.
     expect(logText(root)).toContain('Elvie');
@@ -182,14 +191,14 @@ describe('BUILD 05 — end-to-end conversations', () => {
     // Explicit confirmation via the quick-reply button.
     expect(chips(root).map((c) => c.textContent)).toContain('Bevestigen (simulatie)');
     clickChip(root, 'Bevestigen (simulatie)');
-    await flush();
+    await flush(root);
     expect(logText(root)).toMatch(/SIM-incident-\d{4}/);
     expect(logText(root)).toContain('simulatie');
     expect(ticket.submitCallCount).toBe(1);
 
     // Terminal state: further input is a safe hint, never a new submit.
     submit(root, 'bevestigen');
-    await flush();
+    await flush(root);
     expect(logText(root)).toContain('afgerond');
     expect(ticket.submitCallCount).toBe(1);
     root.remove();
@@ -199,9 +208,9 @@ describe('BUILD 05 — end-to-end conversations', () => {
     const root = document.createElement('div');
     document.body.append(root);
     mount(root);
-    await flush();
+    await flush(root);
     submit(root, 'ik wil een nieuwe laptop aanvragen');
-    await flush();
+    await flush(root);
     // Deterministically answer whatever the engine asks until the preview.
     let guard = 0;
     const answers = new Map<string, string>([
@@ -228,7 +237,7 @@ describe('BUILD 05 — end-to-end conversations', () => {
         const key = [...answers.keys()].find((k) => lastQuestion.includes(k));
         submit(root, key === undefined ? 'een nieuwe laptop' : (answers.get(key) as string));
       }
-      await flush();
+      await flush(root);
       guard += 1;
     }
     expect(logText(root)).toContain('Categorie: aanvraag');
@@ -240,15 +249,15 @@ describe('BUILD 05 — end-to-end conversations', () => {
     const root = document.createElement('div');
     document.body.append(root);
     mount(root);
-    await flush();
+    await flush(root);
     submit(root, 'Ik heb op een link geklikt en daarna mijn wachtwoord ingevuld.');
-    await flush();
+    await flush(root);
     // Neutral, non-judging instruction; no ordinary knowledge fallback.
     expect(logText(root)).toContain('Ik kan je hierbij niet rechtstreeks helpen');
     expect(logText(root)).not.toContain('Lost dit je probleem op?');
     // Safe handover via the 'klaar' quick reply.
     clickChip(root, 'Klaar, verder');
-    await flush();
+    await flush(root);
     expect(logText(root)).toContain('Categorie: beveiligingsmelding');
     root.remove();
   });
@@ -259,7 +268,7 @@ describe('BUILD 05 — end-to-end conversations', () => {
     mount(root);
     await driveToPreview(root);
     submit(root, 'het is eigenlijk een desktop');
-    await flush();
+    await flush(root);
     expect(logText(root)).toContain('bijgewerkte melding');
     expect(root.querySelector('.elvie-card')?.textContent).toContain('Apparaat:');
     expect(root.querySelector('.elvie-card')?.textContent).toContain('desktop');
@@ -275,7 +284,7 @@ describe('BUILD 05 — submission experience', () => {
     mount(root, ticket);
     await driveToPreview(root);
     submit(root, 'bevestigen');
-    await flush();
+    await flush(root);
     expect(logText(root)).toContain('niet gelukt');
     expect(input(root).disabled).toBe(false);
 
@@ -283,7 +292,7 @@ describe('BUILD 05 — submission experience', () => {
     expect(chips(root).map((c) => c.textContent)).toContain('Opnieuw bevestigen');
     ticket.setFailureMode('success');
     clickChip(root, 'Opnieuw bevestigen');
-    await flush();
+    await flush(root);
     expect(logText(root)).toMatch(/SIM-incident-\d{4}/);
     expect(ticket.submitCallCount).toBe(2);
     root.remove();
@@ -296,12 +305,12 @@ describe('BUILD 05 — submission experience', () => {
     mount(root, ticket);
     await driveToPreview(root);
     submit(root, 'bevestigen');
-    await flush();
+    await flush(root);
     expect(logText(root)).toContain('niet zeker');
 
     // A correction during the uncertain outcome never mutates or resubmits.
     submit(root, 'het is eigenlijk een desktop');
-    await flush();
+    await flush(root);
     expect(logText(root)).toContain('niet zeker');
     expect(ticket.submitCallCount).toBe(1);
 
@@ -309,7 +318,7 @@ describe('BUILD 05 — submission experience', () => {
     expect(chips(root).map((c) => c.textContent)).toContain('Status controleren');
     ticket.resolveAsSubmitted('SIM-incident-0421');
     clickChip(root, 'Status controleren');
-    await flush();
+    await flush(root);
     expect(logText(root)).toContain('SIM-incident-0421');
     expect(ticket.submitCallCount).toBe(1);
     root.remove();
@@ -330,16 +339,16 @@ describe('BUILD 05 — submission experience', () => {
     expect(chips(root).every((c) => c.disabled)).toBe(true);
     expect(root.querySelector('.elvie-log')?.getAttribute('aria-busy')).toBe('true');
     expect((root.querySelector('.elvie-status') as HTMLElement | null)?.hidden).toBe(false);
-    await flush();
+    await flush(root);
 
     // A rapid second confirmation is ignored by the busy UI guard.
     const form = root.querySelector('form');
     form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-    await flush();
+    await flush(root);
 
     port.release('SIM-incident-0421');
-    await flush();
-    await flush();
+    await flush(root);
+    await flush(root);
     expect(port.calls).toBe(1);
     expect(logText(root)).toContain('SIM-incident-0421');
     expect(input(root).disabled).toBe(false);
@@ -374,7 +383,7 @@ describe('BUILD 05 — accessibility, mobile and hardening', () => {
     // Fail-closed production composition: no session, input disabled.
     const { createProductionEngine } = await import('../src/app/production-composition');
     createChatShell(root, createProductionEngine(), { createEngine: () => createProductionEngine() });
-    await flush();
+    await flush(root);
     expect(root.querySelector('.elvie-message--error')?.textContent).toContain('niet volledig geconfigureerd');
     expect(input(root).disabled).toBe(true);
     expect(root.querySelector('[data-admin]')).toBeNull();
