@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { classifyAnswerOutcome, recordAnswerOutcome } from '../src/domain/answer-outcome';
+import { ConversationEngine } from '../src/services/conversation-engine';
+import { MockIdentityProvider } from '../src/mocks/mock-identity';
+import { MockKnowledgeProvider } from '../src/mocks/mock-knowledge';
+import { MockTicketProvider } from '../src/mocks/mock-ticket';
+import { InMemoryAuditLogger } from '../src/mocks/in-memory-audit-logger';
+import { consoleOperationalLogger } from '../src/mocks/console-operational-logger';
 import {
   createConversationContext,
   hasReliableFact,
@@ -133,5 +139,101 @@ describe('BUILD 04B — material revision over typed answers (§15.2/§15.3)', (
     recordAnswerOutcome(context, 'device', { kind: 'concrete', value: 'laptop', capturedAtTurn: 10 });
     const afterConcrete = materialStateProjection(context, 'unknown~none');
     expect(nextMaterialRevision(refreshed, afterConcrete, 4)).toBe(5);
+  });
+});
+
+describe('BUILD 04 §15.2 — field-specific concrete validation', () => {
+  it('rejects a bare device or application name as a problem description (irrelevant_answer)', () => {
+    expect(classifyAnswerOutcome('laptop', 1, 'symptom')).toMatchObject({
+      kind: 'invalid',
+      reasonCode: 'irrelevant_answer',
+    });
+    expect(classifyAnswerOutcome('Mijn laptop', 1, 'symptom')).toMatchObject({
+      kind: 'invalid',
+      reasonCode: 'irrelevant_answer',
+    });
+    expect(classifyAnswerOutcome('outlook', 1, 'symptom')).toMatchObject({
+      kind: 'invalid',
+      reasonCode: 'irrelevant_answer',
+    });
+    expect(classifyAnswerOutcome('de printer', 1, 'requestedResource')).toMatchObject({
+      kind: 'invalid',
+      reasonCode: 'irrelevant_answer',
+    });
+  });
+
+  it('keeps meaningful free text concrete for required concrete fields', () => {
+    expect(classifyAnswerOutcome('mijn laptop start niet op', 1, 'symptom')).toMatchObject({
+      kind: 'concrete',
+    });
+    expect(classifyAnswerOutcome('hij crasht bij het opstarten', 1, 'symptom')).toMatchObject({
+      kind: 'concrete',
+    });
+    expect(
+      classifyAnswerOutcome('een nieuwe laptop voor een nieuwe collega', 1, 'requestedResource'),
+    ).toMatchObject({ kind: 'concrete' });
+    expect(classifyAnswerOutcome('gisteren rond negen uur', 1, 'startTime')).toMatchObject({
+      kind: 'concrete',
+    });
+  });
+
+  it('a device answer is not a bare application name and vice versa', () => {
+    expect(classifyAnswerOutcome('laptop', 1, 'device')).toMatchObject({ kind: 'concrete' });
+    expect(classifyAnswerOutcome('mijn laptop', 1, 'device')).toMatchObject({ kind: 'concrete' });
+    expect(classifyAnswerOutcome('outlook', 1, 'device')).toMatchObject({
+      kind: 'invalid',
+      reasonCode: 'irrelevant_answer',
+    });
+    expect(classifyAnswerOutcome('outlook', 1, 'serviceOrApplication')).toMatchObject({
+      kind: 'concrete',
+    });
+    expect(classifyAnswerOutcome('laptop', 1, 'serviceOrApplication')).toMatchObject({
+      kind: 'invalid',
+      reasonCode: 'irrelevant_answer',
+    });
+  });
+
+  it('an irrelevant answer to a required concrete field keeps the intake incomplete', () => {
+    const context = createConversationContext('s-irrelevant', '2026-01-01T00:00:00Z');
+    context.intent = 'incident';
+    context.intakeType = 'incident';
+    recordAnswerOutcome(context, 'symptom', classifyAnswerOutcome('laptop', 1, 'symptom'));
+    const result = validateIntake(context, 'incident', 'workplace');
+    expect(result.fields.find((f) => f.field === 'symptom')).toMatchObject({
+      status: 'invalid',
+      policy: 'required_concrete',
+    });
+    expect(result.outcome).toBe('needs_information');
+  });
+});
+
+describe('BUILD 04 §15.1 — no implicit incident category', () => {
+  function createEngine() {
+    const ticket = new MockTicketProvider();
+    const engine = new ConversationEngine({
+      identity: new MockIdentityProvider(),
+      knowledge: new MockKnowledgeProvider(),
+      ticket,
+      operational: consoleOperationalLogger(),
+      audit: new InMemoryAuditLogger(),
+    });
+    return { engine, ticket };
+  }
+
+  it('an unknown-intent message never yields a preview, a draft or an implicit incident category', async () => {
+    const { engine, ticket } = createEngine();
+    await engine.start();
+    const reply = (await engine.handleEmployeeInput('hallo hallo')).map((m) => m.text).join(' ');
+    expect(engine.currentState).toBe('UNDERSTAND');
+    expect(reply).not.toContain('Categorie:');
+    expect(reply).not.toContain('simulatie');
+    expect(ticket.submitCallCount).toBe(0);
+  });
+
+  it('validation only ever runs with an explicit engine-owned category', () => {
+    const context = createConversationContext('s-nocat', '2026-01-01T00:00:00Z');
+    expect(context.intakeType).toBeUndefined();
+    const explicit = validateIntake(context, 'incident', 'workplace');
+    expect(explicit.category).toBe('incident');
   });
 });

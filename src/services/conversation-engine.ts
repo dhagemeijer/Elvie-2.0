@@ -51,6 +51,8 @@ export interface EngineTexts {
   readonly knowledgeExhausted: string;
   readonly knowledgeDependencyError: string;
   readonly knowledgeDependencyIntake: string;
+  /** BUILD 04 par. 15.1: safe clarification while the effective category is undetermined. */
+  readonly categoryClarification: string;
   readonly resolvedDone: string;
   readonly threeWayQuestion: string;
   readonly previewIntro: string;
@@ -74,6 +76,10 @@ export const DEFAULT_ENGINE_TEXTS: EngineTexts = {
     "De kennisvoorziening is op dit moment niet beschikbaar, waardoor ik geen oplossingen kan opzoeken. Typ 'opnieuw' om het nogmaals te proberen, of 'melding' om je situatie direct vast te leggen.",
   knowledgeDependencyIntake:
     'De kennisvoorziening blijft voor nu onbeschikbaar. We kunnen je situatie vastleggen in deze simulatie.',
+  // BUILD 04 par. 15.1: an undetermined effective category is never turned
+  // into an implicit incident; the employee stays in a safe clarification.
+  categoryClarification:
+    "Ik kan nog niet vaststellen of dit een melding (een storing of probleem) of een aanvraag betreft. Omschrijf kort wat er aan de hand is of wat je wilt aanvragen; ik stel pas een voorbeeld van de melding samen wanneer dat duidelijk is.",
   resolvedDone: 'Fijn dat dit je verder hielp. Fijne dag!',
   // par. 7: fixed three-way question.
   threeWayQuestion: "Lost dit je probleem op? Antwoord 'opgelost', 'niet opgelost' of 'onduidelijk'.",
@@ -373,8 +379,15 @@ export class ConversationEngine {
     if (decision.kind === 'security_sensitive_route') {
       context.intakeType = 'security';
     } else if (decision.kind === 'sufficient_understanding') {
-      context.intakeType =
-        (context.intentClassification?.value ?? context.intent) === 'request' ? 'request' : 'incident';
+      // BUILD 04 par. 15.1: no implicit incident category. The category is
+      // fixed only from a determinate effective intent; an unknown intent
+      // keeps it undetermined (safe clarification flow, never a preview).
+      const effectiveIntent = context.intentClassification?.value ?? context.intent;
+      if (effectiveIntent === 'request') {
+        context.intakeType = 'request';
+      } else if (effectiveIntent === 'incident') {
+        context.intakeType = 'incident';
+      }
     }
     await this.enqueueRoutingUpdate(text);
     // Safe diagnostics only: decision category, never raw input content.
@@ -427,8 +440,9 @@ export class ConversationEngine {
   private async searchKnowledge(): Promise<readonly ChatMessage[]> {
     const context = this.requireContext();
     applyTransition(context, 'KNOWLEDGE_SEARCH');
-    context.intakeType =
-      (context.intentClassification?.value ?? context.intent) === 'request' ? 'request' : 'incident';
+    // BUILD 04 par. 15.1: no implicit incident classification here either;
+    // only a determinate effective intent fixes the category.
+    this.syncIntakeCategory();
     return this.runKnowledgeSearch();
   }
 
@@ -670,6 +684,9 @@ export class ConversationEngine {
     const context = this.requireContext();
     const pending = context.pendingIntakeCategory;
     processEmployeeMessage(context, text);
+    // BUILD 04 par. 15.1: a category-clarifying answer may establish the
+    // effective intent (and thereby the category) - never implicitly.
+    this.syncIntakeCategory();
     context.pendingIntakeCategory = undefined;
     if (pending !== undefined) {
       if (hasReliableFact(context, pending)) {
@@ -682,7 +699,7 @@ export class ConversationEngine {
         // retain that outcome: raw free text is never automatically
         // treated as validated, an accepted explicit unknown completes a
         // required-answer field, an invalid answer gets a bounded retry.
-        recordAnswerOutcome(context, pending, classifyAnswerOutcome(text, context.currentTurn));
+        recordAnswerOutcome(context, pending, classifyAnswerOutcome(text, context.currentTurn, pending));
       }
     }
     // §15.3: the turn commit runs AFTER the validated answer is retained,
@@ -710,14 +727,20 @@ export class ConversationEngine {
    * with an accepted explicit unknown is never asked again; an invalid
    * answer gets exactly one bounded clarification (I-03/I-05).
    */
-  private nextIntakeQuestion(): { field: FactCategory; text: string } | undefined {
+  private nextIntakeQuestion(): { field?: FactCategory; text: string } | undefined {
     const context = this.requireContext();
+    const category = this.effectiveIntakeCategory();
+    // BUILD 04 par. 15.1: an undetermined effective category never proceeds
+    // to field intake or a confirmable preview; safe clarification only.
+    if (category === undefined) {
+      return { text: this.texts.categoryClarification };
+    }
     // F-06/I-10: a security report always takes the safe security route and
     // is never blocked or interrogated: the safe handover has priority.
-    if (this.intakeCategory() === 'security') {
+    if (category === 'security') {
       return undefined;
     }
-    const validation = validateIntake(context, this.intakeCategory(), this.functionalRoute());
+    const validation = validateIntake(context, category, this.functionalRoute());
     this.lastValidation = validation;
     const missingField = validation.fields.find((field) => field.status === 'missing');
     if (missingField !== undefined) {
@@ -738,10 +761,34 @@ export class ConversationEngine {
     return undefined;
   }
 
-  /** Build 04B §6.1: the single engine-owned effective ticket category. */
-  private intakeCategory(): IntakeType {
+  /**
+   * Build 04B par. 6.1 / BUILD 04 par. 15.1: the single engine-owned
+   * effective ticket category. NEVER implicitly 'incident': undefined means
+   * the category is undetermined, and no preview, TicketDraft or mock
+   * submission may be produced from it.
+   */
+  private effectiveIntakeCategory(): IntakeType | undefined {
+    return this.requireContext().intakeType;
+  }
+
+  /**
+   * BUILD 04 par. 15.1: fix the category only from a determinate effective
+   * intent (request -> request, incident -> incident, phishing -> security);
+   * 'unknown' never becomes an implicit incident.
+   */
+  private syncIntakeCategory(): void {
     const context = this.requireContext();
-    return context.intakeType ?? 'incident';
+    if (context.intakeType !== undefined) {
+      return;
+    }
+    const effectiveIntent = context.intentClassification?.value ?? context.intent;
+    if (effectiveIntent === 'request') {
+      context.intakeType = 'request';
+    } else if (effectiveIntent === 'incident') {
+      context.intakeType = 'incident';
+    } else if (effectiveIntent === 'phishing') {
+      context.intakeType = 'security';
+    }
   }
 
   /** Build 04A/04C: current functional route ('unknown' while undetermined). */
@@ -760,9 +807,16 @@ export class ConversationEngine {
    */
   private renderPreview(): readonly ChatMessage[] {
     const context = this.requireContext();
-    const validation = validateIntake(context, this.intakeCategory(), this.functionalRoute());
+    const category = this.effectiveIntakeCategory();
+    if (category === undefined) {
+      // BUILD 04 par. 15.1: an undetermined category never yields a
+      // confirmable preview or a TicketDraft; safe clarification only.
+      this.previewSnapshot = null;
+      return [{ role: 'elvie', text: this.texts.categoryClarification }];
+    }
+    const validation = validateIntake(context, category, this.functionalRoute());
     this.lastValidation = validation;
-    const content = buildTicketContent(context, this.intakeCategory(), this.functionalRoute(), validation);
+    const content = buildTicketContent(context, category, this.functionalRoute(), validation);
     this.previewSnapshot = { content, validation, revision: this.materialRevision };
     this.previewSubphase = 'awaiting_confirmation';
     return this.previewMessages();
@@ -907,6 +961,7 @@ export class ConversationEngine {
     this.previewSubphase = 'editing';
     this.pendingCorrectionField = null;
     processEmployeeMessage(context, text);
+    this.syncIntakeCategory();
     await this.enqueueRoutingUpdate(text);
     this.operational('info', 'preview correction processed', 'success');
     return this.completeCorrection();
@@ -918,8 +973,9 @@ export class ConversationEngine {
     const pending = this.pendingCorrectionField;
     this.pendingCorrectionField = null;
     processEmployeeMessage(context, text);
+    this.syncIntakeCategory();
     if (pending !== null && !hasReliableFact(context, pending)) {
-      recordAnswerOutcome(context, pending, classifyAnswerOutcome(text, context.currentTurn));
+      recordAnswerOutcome(context, pending, classifyAnswerOutcome(text, context.currentTurn, pending));
     } else if (pending !== null) {
       clearAnswerOutcome(context, pending);
     }
@@ -939,7 +995,7 @@ export class ConversationEngine {
     context.pendingIntakeCategory = undefined;
     if (next !== undefined) {
       this.previewSubphase = 'awaiting_correction_answer';
-      this.pendingCorrectionField = next.field;
+      this.pendingCorrectionField = next.field ?? null;
       return [{ role: 'elvie', text: 'Bedankt. Nog één aanvulling:' }, { role: 'elvie', text: next.text }];
     }
     this.previewSubphase = 'revalidating';
@@ -969,7 +1025,13 @@ export class ConversationEngine {
     if (snapshot === null || snapshot.revision !== this.materialRevision) {
       return this.renderPreview();
     }
-    const freshValidation = validateIntake(context, this.intakeCategory(), this.functionalRoute());
+    const category = this.effectiveIntakeCategory();
+    if (category === undefined) {
+      // BUILD 04 par. 15.1: an undetermined category can never produce a
+      // TicketDraft or a mock-submit; safe clarification only.
+      return [{ role: 'elvie', text: this.texts.categoryClarification }];
+    }
+    const freshValidation = validateIntake(context, category, this.functionalRoute());
     this.lastValidation = freshValidation;
     if (freshValidation.outcome === 'needs_information' || freshValidation.outcome === 'clarification_required') {
       // I-06/P-08: essential information missing or contradictory: never
@@ -978,7 +1040,7 @@ export class ConversationEngine {
       this.previewSubphase = 'awaiting_confirmation';
       return this.previewMessages();
     }
-    const freshContent = buildTicketContent(context, this.intakeCategory(), this.functionalRoute(), freshValidation);
+    const freshContent = buildTicketContent(context, category, this.functionalRoute(), freshValidation);
     if (JSON.stringify(freshContent) !== JSON.stringify(snapshot.content)) {
       // P-11/P-13: any drift between the confirmed snapshot and the
       // current validated content re-renders a fresh preview instead.

@@ -5,8 +5,18 @@
  * explicit_unknown or invalid. Raw free text is never automatically
  * treated as validated; sensitive values are never retained (never in
  * facts, answers, previews, drafts or logs).
+ *
+ * BUILD 04 §15.2: classification is field-specific. General text checks
+ * (length, bare commands, sensitive values) apply to every answer, but a
+ * CONCRETE verdict additionally requires that the answer is substantively
+ * usable for the specific required field: a bare device or application
+ * name is not a problem description, and a bare application name is not
+ * a device. Meaningful free text is always preserved; no generative AI
+ * and no rigid keyword list of content words is used.
  */
 import type { ConversationContext } from './conversation-context';
+import type { FactCategory } from './facts';
+import { FICTIONAL_RECOGNITION_CATALOG } from './recognition-catalog';
 import { containsSensitiveValue } from '../security/sensitive-values';
 
 export type AnswerOutcome =
@@ -45,7 +55,104 @@ const BARE_COMMAND_WORDS: readonly string[] = [
   'verzenden',
 ];
 
-export function classifyAnswerOutcome(raw: string, capturedAtTurn: number): AnswerOutcome {
+/**
+ * Trivial Dutch glue words ignored when deciding whether an answer adds
+ * anything beyond recognized device/application names. This is NOT a
+ * keyword list for content: it contains only words that carry no
+ * substantive meaning on their own.
+ */
+const GLUE_WORDS: ReadonlySet<string> = new Set([
+  'de',
+  'het',
+  'een',
+  'mijn',
+  'jouw',
+  'van',
+  'op',
+  'in',
+  'is',
+  'zijn',
+  'dat',
+  'die',
+  'deze',
+  'en',
+  'of',
+  'met',
+  'voor',
+  'aan',
+  'bij',
+  'er',
+  'niet',
+  'geen',
+]);
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Word-bounded removal of one catalogue alias from an answer. */
+function stripAlias(normalized: string, alias: string): string {
+  return normalized.replace(new RegExp('\\b' + escapeRegExp(alias) + '\\b', 'g'), ' ');
+}
+
+/**
+ * True when the answer consists solely of recognized subject names of the
+ * given kind(s) plus trivial glue words: no substantive content remains.
+ * Deterministic and explainable: it reuses only the existing recognition
+ * catalogue aliases, never an invented content vocabulary.
+ */
+function isBareSubjectAnswer(
+  normalized: string,
+  kind: 'device' | 'application' | 'both',
+): boolean {
+  let stripped = normalized;
+  if (kind !== 'application') {
+    for (const entry of FICTIONAL_RECOGNITION_CATALOG.devices) {
+      for (const alias of entry.aliases) {
+        stripped = stripAlias(stripped, alias);
+      }
+    }
+  }
+  if (kind !== 'device') {
+    for (const entry of FICTIONAL_RECOGNITION_CATALOG.applications) {
+      for (const alias of entry.aliases) {
+        stripped = stripAlias(stripped, alias);
+      }
+    }
+  }
+  return stripped.split(/\s+/).every((word) => word.length === 0 || GLUE_WORDS.has(word));
+}
+
+/**
+ * BUILD 04 §15.2: is this answer substantively usable for the specific
+ * required field? Descriptive fields (a symptom or request objective) need
+ * more than a bare device/application name; a device answer is not a bare
+ * application name and vice versa. All other meaningful free text stays
+ * concrete.
+ */
+function isUsableAnswerForField(normalized: string, field: FactCategory): boolean {
+  switch (field) {
+    case 'symptom':
+    case 'requestedResource':
+      // A problem description or request objective must describe
+      // something; a bare device or application name does not.
+      return !isBareSubjectAnswer(normalized, 'both');
+    case 'device':
+      // A device answer is not completed by a bare application name.
+      return !isBareSubjectAnswer(normalized, 'application');
+    case 'serviceOrApplication':
+      // An application answer is not completed by a bare device name.
+      return !isBareSubjectAnswer(normalized, 'device');
+    default:
+      return true;
+  }
+}
+
+export function classifyAnswerOutcome(
+  raw: string,
+  capturedAtTurn: number,
+  field?: FactCategory,
+): AnswerOutcome {
   const normalized = raw.trim().toLowerCase();
   if (normalized.length === 0) {
     return { kind: 'invalid', reasonCode: 'empty_answer', capturedAtTurn };
@@ -62,6 +169,12 @@ export function classifyAnswerOutcome(raw: string, capturedAtTurn: number): Answ
   }
   if (BARE_COMMAND_WORDS.includes(normalized)) {
     return { kind: 'invalid', reasonCode: 'unusable_answer', capturedAtTurn };
+  }
+  // BUILD 04 §15.2: field-specific usability for a CONCRETE verdict. An
+  // irrelevant answer for the required field is invalid (bounded retry);
+  // meaningful free text stays concrete.
+  if (field !== undefined && !isUsableAnswerForField(normalized, field)) {
+    return { kind: 'invalid', reasonCode: 'irrelevant_answer', capturedAtTurn };
   }
   return { kind: 'concrete', value: raw.trim(), capturedAtTurn };
 }
