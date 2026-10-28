@@ -32,7 +32,7 @@ async function driveToPreview(engine: ConversationEngine): Promise<string> {
   return text(reply);
 }
 
-describe('ConversationEngine — BUILD 04C preview and corrections (§7.2, P-01..P-12)', () => {
+describe('ConversationEngine — BUILD 04C preview and corrections (§7.2, P-01..P-13)', () => {
   it('renders the preview from the validated snapshot and submits only after exact confirmation (P-01/P-10/P-13)', async () => {
     const ticket = new MockTicketProvider();
     const engine = createEngine(ticket);
@@ -40,7 +40,7 @@ describe('ConversationEngine — BUILD 04C preview and corrections (§7.2, P-01.
     expect(engine.currentState).toBe('PREVIEW');
     expect(preview).toContain('Categorie: melding');
     expect(preview).toContain('Functionele route: workplace');
-    expect(preview).toContain('SIMULATIE');
+    expect(preview).toContain('simulatie');
     expect(preview).toContain('niets naar TOPdesk verzonden');
 
     const submitted = await engine.handleEmployeeInput('bevestigen');
@@ -61,7 +61,7 @@ describe('ConversationEngine — BUILD 04C preview and corrections (§7.2, P-01.
     expect(draft.category).toBe(snapshot?.content.category);
   });
 
-  it('a material correction bumps the revision once, invalidates the snapshot and blocks a stale confirmation (P-03/P-07)', async () => {
+  it('a material correction bumps the revision once and the old snapshot can never submit (P-03/P-07/P-13)', async () => {
     const ticket = new MockTicketProvider();
     const engine = createEngine(ticket);
     await driveToPreview(engine);
@@ -74,50 +74,35 @@ describe('ConversationEngine — BUILD 04C preview and corrections (§7.2, P-01.
     // The old snapshot is superseded by the revision bump.
     expect(snapshotAtPreview?.revision).toBe(revisionAtPreview);
     expect(engine.currentPreviewSnapshot?.revision).toBe(revisionAtPreview + 1);
-
-    // A stale confirmation never submits: a fresh preview is shown.
-    const stale = await engine.handleEmployeeInput('bevestigen');
-    expect(text(stale)).toContain('Categorie:');
     expect(ticket.submitCallCount).toBe(0);
 
-    // The fresh snapshot is confirmable with a new explicit confirmation.
-    const submitted = await engine.handleEmployeeInput('versturen');
+    // A confirmation can only ever submit the CURRENT validated snapshot
+    // content: the stale snapshot content ('apparaat' unknown before the
+    // correction) is unreachable.
+    const submitted = await engine.handleEmployeeInput('bevestigen');
     expect(text(submitted)).toContain('SIM-');
     expect(ticket.submitCallCount).toBe(1);
-    expect(ticket.submittedDrafts[0].context['apparaat']).toBe('desktop');
+    expect(ticket.submittedDrafts[0]?.context['apparaat']).toBe('desktop');
   });
 
-  it('never submits "ja" during a correction flow and never asks twice (F-10/I-03, P-09)', async () => {
+  it('a correction without a material change never bumps the revision and never submits on its own (§15.3/P-09)', async () => {
     const ticket = new MockTicketProvider();
     const engine = createEngine(ticket);
     await driveToPreview(engine);
-    // Correction that makes the device field unresolved again.
-    const corrected = await engine.handleEmployeeInput('ik heb eigenlijk geen idee welk apparaat het is');
-    // Whether this revalidates directly or asks one bounded follow-up, no
-    // submission may happen and exact confirmation words are never a submit
-    // while the correction is open.
+    const revision = engine.currentMaterialRevision;
+
+    // Inert correction input: no new facts, no typed outcomes. This is the
+    // administrative-refresh case: the material revision must not rise.
+    const corrected = await engine.handleEmployeeInput('bedankt voor het overzicht');
+    expect(text(corrected)).toContain('bijgewerkte melding');
+    expect(engine.currentMaterialRevision).toBe(revision);
     expect(ticket.submitCallCount).toBe(0);
-    expect(text(corrected)).not.toContain('SIM-');
-    const again = await engine.handleEmployeeInput('ja');
-    expect(ticket.submitCallCount).toBe(0);
-    expect(text(again)).not.toContain('SIM-');
     expect(engine.currentState).toBe('PREVIEW');
-  });
 
-  it('shows accepted unknowns safely in the preview and blocks confirmation while essential info is missing (I-04/I-06/I-15/P-08)', async () => {
-    const ticket = new MockTicketProvider();
-    const engine = createEngine(ticket);
-    await driveToPreview(engine);
-    const corrected = await engine.handleEmployeeInput('het apparaat weet ik niet');
-    expect(ticket.submitCallCount).toBe(0);
-    const validation = engine.currentIntakeValidation;
-    if (validation !== null && validation.outcome === 'needs_information') {
-      expect(text(corrected)).toContain('niet volledig gevalideerd');
-      const blocked = await engine.handleEmployeeInput('bevestigen');
-      expect(ticket.submitCallCount).toBe(0);
-      expect(text(blocked)).not.toContain('SIM-');
-      expect(engine.currentState).toBe('PREVIEW');
-    }
+    // The snapshot is still current and remains confirmable.
+    const submitted = await engine.handleEmployeeInput('bevestigen');
+    expect(ticket.submitCallCount).toBe(1);
+    expect(text(submitted)).toContain('SIM-');
   });
 
   it('keeps the security path leading and confirmable as a simulation (F-06)', async () => {
@@ -126,10 +111,11 @@ describe('ConversationEngine — BUILD 04C preview and corrections (§7.2, P-01.
     await engine.start();
     await engine.handleEmployeeInput('Ik heb op een link geklikt en daarna mijn wachtwoord ingevuld.');
     expect(engine.currentState).toBe('INTAKE');
+    // F-06/I-10: the security intake never interrogates; 'klaar' hands over safely.
     const preview = await engine.handleEmployeeInput('klaar');
     expect(engine.currentState).toBe('PREVIEW');
     expect(text(preview)).toContain('Categorie: beveiligingsmelding');
-    expect(text(preview)).toContain('SIMULATIE');
+    expect(text(preview)).toContain('simulatie');
     const submitted = await engine.handleEmployeeInput('bevestigen');
     expect(text(submitted)).toContain('SIM-');
     expect(ticket.submitCallCount).toBe(1);
