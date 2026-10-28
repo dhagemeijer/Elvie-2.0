@@ -175,7 +175,9 @@ function mount(root: HTMLElement, engine: ConversationEngine, options: ChatShell
       if (separator > 0) {
         const label = document.createElement('span');
         label.className = 'elvie-card-label';
-        label.textContent = line.slice(0, separator + 1);
+        // Keep the separating space so textContent-based assertions (and
+        // screen readers) read 'Bron: TOPdesk Kennisbank', not 'Bron:TOPdesk'.
+        label.textContent = line.slice(0, separator + 1) + ' ';
         const value = document.createElement('span');
         value.className = 'elvie-card-value';
         value.textContent = line.slice(separator + 2);

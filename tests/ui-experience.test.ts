@@ -90,6 +90,8 @@ async function flush(root?: HTMLElement): Promise<void> {
 
 /** Drive the deterministic incident flow through the UI to the preview. */
 async function driveToPreview(root: HTMLElement): Promise<void> {
+  // Wait for the async boot: during start() the busy guard swallows input.
+  await flush(root);
   submit(root, 'printer print niet');
   await flush(root);
   let guard = 0;
@@ -357,10 +359,13 @@ describe('BUILD 05 — submission experience', () => {
 });
 
 describe('BUILD 05 — accessibility, mobile and hardening', () => {
-  it('9. keyboard interaction, touch targets and reduced-motion are in place', () => {
+  it('9. keyboard interaction, touch targets and reduced-motion are in place', async () => {
     const root = document.createElement('div');
     document.body.append(root);
     mount(root);
+    // Let the async boot settle first: during start() the input is disabled
+    // (fail-closed busy state) and a disabled control cannot receive focus.
+    await flush(root);
     const el = input(root);
     el.focus();
     expect(document.activeElement).toBe(el);
