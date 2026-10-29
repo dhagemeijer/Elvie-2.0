@@ -39,6 +39,7 @@ npm run typecheck  # tsc --noEmit
 npm run lint       # eslint
 npm run test       # vitest run (unit tests + UI smoke test)
 npm run build      # vite production build (fail-closed composition)
+npm run build:simulation  # simulation build with fictional mocks, runs on localhost only
 npm run verify     # typecheck + lint + test + build
 ```
 
@@ -46,6 +47,17 @@ Notes:
 - The dev server (`npm run dev`) wires fictional mocks so the foundation can be exercised locally.
 - The production build contains no mock identity: the unconfigured identity port fails closed by design.
 - See the [Build 01 implementation note](BUILD_01_IMPLEMENTATION.md).
+
+### Vercel Preview simulation (Build 05.3)
+
+Vercel runs `npm run build:vercel` (see `vercel.json` and `scripts/vercel-build.mjs`).
+
+- **Production deployments** always get the fail-closed production build. The bundle does not contain the mock composition.
+- **Preview deployments** get the simulation build (fictional mocks only, permanent SIMULATIE badge) only when the project variable `ELVIE_SIMULATION=1` is set **for the Preview environment only**. Without it, previews are fail-closed too. There is no fallback.
+- `ELVIE_SIMULATION` present in a Production build, a simulation build for Production, or `NODE_ENV` other than `production` fails the build.
+- A simulation artifact runs the mocks only on the exact hostnames baked in at build time (`VERCEL_URL`, `VERCEL_BRANCH_URL`). On any other host, including the production domain if Vercel promotes the same artifact without rebuilding, it uses the fail-closed production composition. This hostname gate is defence in depth. The build-time separation is the primary boundary.
+- Requires Vercel's system environment variables to be exposed (default). Enable Vercel Authentication (Deployment Protection) for previews.
+- Regression evidence: `tests/simulation-artifact.test.ts` builds both real bundles and runs them on preview, production and other hosts.
 
 See:
 - [Architecture](ARCHITECTURE.md)
