@@ -19,6 +19,10 @@ export const CONTRACTION_MAP: Readonly<Record<string, string>> = {
 export const PHRASE_MAP: Readonly<Record<string, string>> = {
   'doet t': 'doet het',
   'werkt t': 'werkt het',
+  // BUILD 05.2 (B05-T05): employees often type "e mail" without the hyphen;
+  // restore the canonical "e-mail" spelling so catalogue aliases and the
+  // deterministic security phrase rules match reliably.
+  'e mail': 'e-mail',
 };
 
 function replaceWordBounded(text: string, search: string, replacement: string): string {

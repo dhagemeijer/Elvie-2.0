@@ -89,9 +89,15 @@ export interface DerivedFactRecord {
  */
 export type FactRecord = ExplicitFactRecord | DerivedFactRecord;
 
-/** Deterministic, conservative security indicators (BUILD_02.md par. 7). */
+/**
+ * Deterministic, conservative security indicators (BUILD_02.md par. 7).
+ * BUILD 05.2 adds suspicious_attachment_opened (B05-T05): opening or
+ * downloading a suspicious/unknown attachment is its own conservative
+ * signal, composed independently of the link-click signal.
+ */
 export type SecurityIndicator =
   | 'suspicious_message_received'
   | 'suspicious_link_clicked'
+  | 'suspicious_attachment_opened'
   | 'credentials_entered_after_suspicious_link'
   | 'suspected_account_compromise';
