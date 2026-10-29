@@ -56,8 +56,13 @@ export const SECURITY_PHRASE_RULES: readonly SecurityPhraseRule[] = [
     // denial ("niet op de link geklikt") never signals: every alternative
     // is negation-guarded with a lookbehind, and the separated variant
     // additionally rejects a "niet" between the link and the click.
+    // BUILD 05.2.1: that "niet" check is limited to the words BETWEEN the
+    // link and the click (tempered token). normalizeInput strips sentence
+    // punctuation, so the former lookahead scanned the whole message and a
+    // later, unrelated "niet" ("... geklikt en weet niet of dat erg is")
+    // suppressed a real click report.
     pattern:
-      /(?<!\bniet )\bop (?:een|de|het|die|mijn) links? (?:geklikt|gedrukt)\b|(?<!\bniet )\bgeklikt op (?:een|de|het|die|mijn) links?\b|\blinks? aangeklikt\b|(?<!\bniet )\bop (?:een|de|het|die|mijn) links?\b(?![^.!?]*\bniet\b)[^.!?]*?\bgeklikt\b/,
+      /(?<!\bniet )\bop (?:een|de|het|die|mijn) links? (?:geklikt|gedrukt)\b|(?<!\bniet )\bgeklikt op (?:een|de|het|die|mijn) links?\b|\blinks? aangeklikt\b|(?<!\bniet )\bop (?:een|de|het|die|mijn) links?\b(?:(?!\bniet\b)[^.!?])*?\bgeklikt\b/,
     indicator: 'suspicious_link_clicked',
   },
   {
