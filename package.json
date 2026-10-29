@@ -11,6 +11,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "build": "vite build",
+    "build:simulation": "vite build --mode simulation --outDir dist-simulation",
+    "build:vercel": "node scripts/vercel-build.mjs",
     "verify": "npm run typecheck && npm run lint && npm run test && npm run build"
   },
   "devDependencies": {

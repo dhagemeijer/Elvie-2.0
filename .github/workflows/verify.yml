@@ -38,3 +38,8 @@ jobs:
         run: npm run test
       - name: Production build
         run: npm run build
+      # BUILD 05.3: the local simulation build must keep building; the
+      # Preview/Production separation itself is proven by
+      # tests/simulation-artifact.test.ts in the Tests step.
+      - name: Simulation build (fictional mocks, localhost only)
+        run: npm run build:simulation
